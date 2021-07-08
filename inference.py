@@ -16,9 +16,13 @@ from __future__ import print_function
 # which comprise the little language for which types
 # will be inferred
 
-class Lambda(object):
-    """Lambda abstraction"""
+class AstTreeNode(object):
+    def __init__(self):
+        self.m_set = set()   # monomorphic set
 
+
+class Lambda(AstTreeNode):
+    """Lambda abstraction"""
     def __init__(self, v, body):
         self.v = v
         self.body = body
@@ -27,9 +31,8 @@ class Lambda(object):
         return "(fn {v} => {body})".format(v=self.v, body=self.body)
 
 
-class Identifier(object):
+class Identifier(AstTreeNode):
     """Identifier"""
-
     def __init__(self, name):
         self.name = name
 
@@ -37,7 +40,7 @@ class Identifier(object):
         return self.name
 
 
-class Apply(object):
+class Apply(AstTreeNode):
     """Function application"""
 
     def __init__(self, fn, arg):
@@ -48,7 +51,7 @@ class Apply(object):
         return "({fn} {arg})".format(fn=self.fn, arg=self.arg)
 
 
-class Let(object):
+class Let(AstTreeNode):
     """Let binding"""
 
     def __init__(self, v, defn, body):
@@ -60,7 +63,7 @@ class Let(object):
         return "(let {v} = {defn} in {body})".format(v=self.v, defn=self.defn, body=self.body)
 
 
-class Letrec(object):
+class Letrec(AstTreeNode):
     """Letrec binding"""
 
     def __init__(self, v, defn, body):
