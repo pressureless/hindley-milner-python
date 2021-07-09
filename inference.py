@@ -74,7 +74,6 @@ class Letrec(AstTreeNode):
     def __str__(self):
         return "(letrec {v} = {defn} in {body})".format(v=self.v, defn=self.defn, body=self.body)
 
-
 # =======================================================#
 # Exception types
 
@@ -166,6 +165,22 @@ class Function(TypeOperator):
         super(Function, self).__init__("->", [from_type, to_type])
 
 
+
+def ftv(x):
+    if isinstance(x, Function):
+        return ftv(x.types[0]) | ftv(x.types[1])
+    elif isinstance(x, Apply):
+        return ftv(x.fn) | ftv(x.arg)
+    elif isinstance(x, Let):
+        return ftv(x.body).set_A.difference(ftv(x.v))
+    # elif isinstance(x, TypeOperator):
+    #     return ftv(x.fn) | ftv(x.arg)
+    elif isinstance(x, TypeVariable):
+        return set([x])
+    else:
+        return set()
+
+
 # Basic types are constructed with a nullary type constructor
 Integer = TypeOperator("int", [])  # Basic integer
 Bool = TypeOperator("bool", [])  # Basic bool
@@ -173,7 +188,7 @@ Bool = TypeOperator("bool", [])  # Basic bool
 
 # =======================================================#
 # Type inference machinery
-
+constraint = []
 def analyse(node, env, non_generic=None):
     """Computes the type of the expression given by node.
 
@@ -198,7 +213,7 @@ def analyse(node, env, non_generic=None):
             if it is not possible to unify two types such as Integer and Bool
         ParseError: The abstract syntax tree rooted at node could not be parsed
     """
-
+    global constraint
     if non_generic is None:
         non_generic = set()
 
@@ -208,7 +223,8 @@ def analyse(node, env, non_generic=None):
         fun_type = analyse(node.fn, env, non_generic)
         arg_type = analyse(node.arg, env, non_generic)
         result_type = TypeVariable()
-        unify(Function(arg_type, result_type), fun_type)
+        # unify(Function(arg_type, result_type), fun_type)
+        constraint += [(Function(arg_type, result_type), fun_type)]
         return result_type
     elif isinstance(node, Lambda):
         arg_type = TypeVariable()
@@ -230,7 +246,8 @@ def analyse(node, env, non_generic=None):
         new_non_generic = non_generic.copy()
         new_non_generic.add(new_type)
         defn_type = analyse(node.defn, new_env, new_non_generic)
-        unify(new_type, defn_type)
+        # unify(new_type, defn_type)
+        constraint += [(new_type, defn_type)]
         return analyse(node.body, new_env, non_generic)
     assert 0, "Unhandled syntax node {0}".format(type(node))
 
@@ -282,39 +299,147 @@ def fresh(t, non_generic):
     return freshrec(t)
 
 
-def unify(t1, t2):
-    """Unify the two types t1 and t2.
+# def unify(t1, t2):
+#     """Unify the two types t1 and t2.
+#
+#     Makes the types t1 and t2 the same.
+#
+#     Args:
+#         t1: The first type to be made equivalent
+#         t2: The second type to be be equivalent
+#
+#     Returns:
+#         None
+#
+#     Raises:
+#         InferenceError: Raised if the types cannot be unified.
+#     """
+#
+#     a = prune(t1)
+#     b = prune(t2)
+#     if isinstance(a, TypeVariable):
+#         if a != b:
+#             if occurs_in_type(a, b):
+#                 raise InferenceError("recursive unification")
+#             a.instance = b
+#     elif isinstance(a, TypeOperator) and isinstance(b, TypeVariable):
+#         unify(b, a)
+#     elif isinstance(a, TypeOperator) and isinstance(b, TypeOperator):
+#         if a.name != b.name or len(a.types) != len(b.types):
+#             raise InferenceError("Type mismatch: {0} != {1}".format(str(a), str(b)))
+#         for p, q in zip(a.types, b.types):
+#             unify(p, q)
+#     else:
+#         assert 0, "Not unified"
 
-    Makes the types t1 and t2 the same.
+### == Constraint Solver ==
+from collections import deque
+def empty():
+    return {}
 
-    Args:
-        t1: The first type to be made equivalent
-        t2: The second type to be be equivalent
+def const_type(x):
+    if isinstance(x, TypeOperator) and len(x.types) == 0:
+        return True
+    return False
 
-    Returns:
-        None
+def apply(s, t):
+    if const_type(t) or isinstance(t, Identifier):
+        return t
+    elif isinstance(t, Apply):
+        return Apply(apply(s, t.fn), apply(s, t.arg))
+    elif isinstance(t, Let):
+        return Let(t.v, apply(s, t.defn), apply(s, t.body))
+    elif isinstance(t, Letrec):
+        return Letrec(t.v, apply(s, t.defn), apply(s, t.body))
+    elif isinstance(t, Lambda):
+        return Lambda(t.v, apply(s, t.body))
+    elif isinstance(t, Function):
+        return Function(apply(s, t.types[0]), apply(s, t.types[1]))
+    elif isinstance(t, TypeVariable):
+        return s.get(t.name, t)
 
-    Raises:
-        InferenceError: Raised if the types cannot be unified.
-    """
+def retrieve_type(node):
+    if const_type(node) or isinstance(node, Identifier):
+        return node
+    elif isinstance(node, Apply):
+        return retrieve_type(node.fn)
+    elif isinstance(node, Let):
+        return retrieve_type(node.body)
+    elif isinstance(node, Letrec):
+        return retrieve_type(node.body)
+    elif isinstance(node, Lambda):
+        return node
+    elif isinstance(node, Function):
+        return node.types[-1]
+    elif isinstance(node, TypeOperator):
+        return node
+    elif isinstance(node, TypeVariable):
+        return node
 
-    a = prune(t1)
-    b = prune(t2)
-    if isinstance(a, TypeVariable):
-        if a != b:
-            if occurs_in_type(a, b):
-                raise InferenceError("recursive unification")
-            a.instance = b
-    elif isinstance(a, TypeOperator) and isinstance(b, TypeVariable):
-        unify(b, a)
-    elif isinstance(a, TypeOperator) and isinstance(b, TypeOperator):
-        if a.name != b.name or len(a.types) != len(b.types):
-            raise InferenceError("Type mismatch: {0} != {1}".format(str(a), str(b)))
-        for p, q in zip(a.types, b.types):
-            unify(p, q)
+def applyList(s, xs):
+    return [(apply(s, x), apply(s, y)) for (x, y) in xs]
+
+class InferError(Exception):
+    def __init__(self, ty1, ty2):
+        self.ty1 = ty1
+        self.ty2 = ty2
+
+    def __str__(self):
+        return '\n'.join([
+            "Type mismatch: ",
+            "Given: ", "\t" + str(self.ty1),
+            "Expected: ", "\t" + str(self.ty2)
+        ])
+
+def unify(x, y):
+    if isinstance(x, Apply) and isinstance(y, Apply):
+        s1 = unify(x.fn, y.fn)
+        s2 = unify(apply(s1, x.arg), apply(s1, y.arg))
+        return compose(s2, s1)
+    elif const_type(x) and const_type(y) and (x.name == y.name):
+        return empty()
+    elif isinstance(x, TypeOperator) and isinstance(y, TypeOperator):
+        if len(x.types) != len(y.types):
+            return Exception("Wrong number of arguments")
+        s1 = solve(zip([x.types[0]], [y.types[0]]))
+        s2 = unify(apply(s1, x.types[1]), apply(s1, y.types[1]))
+        return compose(s2, s1)
+    elif isinstance(x, TypeVariable):
+        return bind(x.name, y)
+    elif isinstance(y, TypeVariable):
+        return bind(y.name, x)
     else:
-        assert 0, "Not unified"
+        raise InferError(x, y)
 
+def solve(xs):
+    mgu = empty()
+    cs = deque(xs)
+    while len(cs):
+        (a, b) = cs.pop()
+        s = unify(a, b)
+        mgu = compose(s, mgu)
+        cs = deque(applyList(s, cs))
+    return mgu
+
+def bind(n, x):
+    if x == n:
+        return empty()
+    elif occurs_check(n, x):
+        raise InfiniteType(n, x)
+    else:
+        return dict([(n, x)])
+
+def occurs_check(n, x):
+    return n in ftv(x)
+
+def union(s1, s2):
+    nenv = s1.copy()
+    nenv.update(s2)
+    return nenv
+
+def compose(s1, s2):
+    s3 = dict((t, apply(s1, u)) for t, u in s2.items())
+    return union(s1, s3)
 
 def prune(t):
     """Returns the currently defining instance of t.
@@ -422,10 +547,20 @@ def try_exp(env, node):
     Returns:
         None
     """
+    global constraint
+    constraint = []
     print(str(node) + " : ", end=' ')
     try:
         t = analyse(node, env)
-        print(str(t))
+        print("\nconstraint: {}".format(constraint))
+        print("env: {}\n".format(env))
+        print("str: {}\n".format(str(t)))
+        mgu = solve(constraint)
+        print("mgu: {}\n".format(mgu))
+        infer_ty = apply(mgu, node)
+        print("infer_ty: {}\n".format(infer_ty))
+        res = retrieve_type(infer_ty)
+        print("res: {}\n".format(res))
     except (ParseError, InferenceError) as e:
         print(e)
 
@@ -520,8 +655,10 @@ def main():
         Lambda("f", Lambda("g", Lambda("arg", Apply(Identifier("g"), Apply(Identifier("f"), Identifier("arg"))))))
     ]
 
-    for example in examples:
-        try_exp(my_env, example)
+    # try_exp(my_env, Apply(Identifier("zero"), Identifier("4")))
+    try_exp(my_env, Let("f", Lambda("x", Identifier("x")), Apply(Identifier("f"), Identifier("4"))))
+    # for example in examples:
+    #     try_exp(my_env, example)
 
 
 if __name__ == '__main__':
