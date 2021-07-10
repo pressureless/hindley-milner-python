@@ -9,7 +9,22 @@
 """
 
 from __future__ import print_function
+from enum import Enum
 
+
+class ConsType(Enum):
+    ConsInvalid = -1
+    ConsEq = 0
+    ConsLess = 1
+    ConsLessM = 2
+
+
+class TypeConstraint(object):
+    def __init__(self, lhs=None, rhs=None, ctype=ConsType.ConsInvalid, mid=None):
+        self.lhs = lhs
+        self.rhs = rhs
+        self.mid = mid
+        self.ctype = ctype
 
 # =======================================================#
 # Class definitions for the abstract syntax tree nodes
@@ -19,21 +34,30 @@ from __future__ import print_function
 class AstTreeNode(object):
     def __init__(self):
         self.m_set = set()   # monomorphic set
+        
+    def add_m(self, tyv):
+        self.m_set.add(tyv)
 
 
 class Lambda(AstTreeNode):
     """Lambda abstraction"""
     def __init__(self, v, body):
+        super().__init__()
         self.v = v
         self.body = body
 
     def __str__(self):
         return "(fn {v} => {body})".format(v=self.v, body=self.body)
 
+    def add_m(self, tyv):
+        super(Lambda, self).add_m(tyv)
+        self.body.add_m(tyv)
+
 
 class Identifier(AstTreeNode):
     """Identifier"""
     def __init__(self, name):
+        super().__init__()
         self.name = name
 
     def __str__(self):
@@ -42,19 +66,24 @@ class Identifier(AstTreeNode):
 
 class Apply(AstTreeNode):
     """Function application"""
-
     def __init__(self, fn, arg):
+        super().__init__()
         self.fn = fn
         self.arg = arg
 
     def __str__(self):
         return "({fn} {arg})".format(fn=self.fn, arg=self.arg)
 
+    def add_m(self, tyv):
+        super(Apply, self).add_m(tyv)
+        self.fn.add_m(tyv)
+        self.arg.add_m(tyv)
+
 
 class Let(AstTreeNode):
     """Let binding"""
-
     def __init__(self, v, defn, body):
+        super().__init__()
         self.v = v
         self.defn = defn
         self.body = body
@@ -62,17 +91,27 @@ class Let(AstTreeNode):
     def __str__(self):
         return "(let {v} = {defn} in {body})".format(v=self.v, defn=self.defn, body=self.body)
 
+    def add_m(self, tyv):
+        super(Let, self).add_m(tyv)
+        self.defn.add_m(tyv)
+        self.body.add_m(tyv)
+
 
 class Letrec(AstTreeNode):
     """Letrec binding"""
-
     def __init__(self, v, defn, body):
+        super().__init__()
         self.v = v
         self.defn = defn
         self.body = body
 
     def __str__(self):
         return "(letrec {v} = {defn} in {body})".format(v=self.v, defn=self.defn, body=self.body)
+
+    def add_m(self, tyv):
+        super(Letrec, self).add_m(tyv)
+        self.defn.add_m(tyv)
+        self.body.add_m(tyv)
 
 # =======================================================#
 # Exception types
@@ -232,6 +271,7 @@ def analyse(node, env, non_generic=None):
         new_env[node.v] = arg_type
         new_non_generic = non_generic.copy()
         new_non_generic.add(arg_type)
+        node.body.add_m(arg_type)
         result_type = analyse(node.body, new_env, new_non_generic)
         return Function(arg_type, result_type)
     elif isinstance(node, Let):
