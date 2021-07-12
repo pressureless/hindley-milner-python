@@ -9,10 +9,10 @@
 """
 
 from __future__ import print_function
-from enum import Enum
+from enum import IntEnum
 
 
-class ConsType(Enum):
+class ConsType(IntEnum):
     ConsInvalid = -1
     ConsEq = 0
     ConsLess = 1
@@ -25,6 +25,11 @@ class TypeConstraint(object):
         self.rhs = rhs
         self.mid = mid
         self.ctype = ctype
+        if ctype == ConsType.ConsLess and mid is not None:
+            self.ctype = ConsType.ConsLessM
+
+    def __str__(self):
+        return "lhs:{}, rhs:{}, type:{}, mid:{}".format(self.lhs, self.rhs, self.ctype, self.mid)
 
 # =======================================================#
 # Class definitions for the abstract syntax tree nodes
@@ -177,7 +182,7 @@ class TypeVariable(object):
             return self.name
 
     def __repr__(self):
-        return "TypeVariable(id = {0})".format(self.id)
+        return "TypeVariable(id = {0}, name={1})".format(self.id, self.name)
 
 
 class TypeOperator(object):
@@ -228,7 +233,7 @@ Bool = TypeOperator("bool", [])  # Basic bool
 # =======================================================#
 # Type inference machinery
 constraint = []
-def analyse(node, env, non_generic=None):
+def analyse(node, env=None):
     """Computes the type of the expression given by node.
 
     The type of the node is computed in the context of the
@@ -252,33 +257,42 @@ def analyse(node, env, non_generic=None):
             if it is not possible to unify two types such as Integer and Bool
         ParseError: The abstract syntax tree rooted at node could not be parsed
     """
-    global constraint
-    if non_generic is None:
-        non_generic = set()
-
+    assum = {}     # assumptions
+    cons = set()   # constraints
     if isinstance(node, Identifier):
-        return get_type(node.name, env, non_generic)
+        if node.name in env:
+            v_type = env[node.name]
+        elif is_integer_literal(node.name):
+            v_type = Integer
+        else:
+            v_type = TypeVariable()
+            assum[node.name] = v_type
+        return v_type, assum, cons
     elif isinstance(node, Apply):
-        fun_type = analyse(node.fn, env, non_generic)
-        arg_type = analyse(node.arg, env, non_generic)
+        fun_type, assum, cons1 = analyse(node.fn, env)
+        arg_type, assum2, cons2 = analyse(node.arg, env)
         result_type = TypeVariable()
-        # unify(Function(arg_type, result_type), fun_type)
-        constraint += [(Function(arg_type, result_type), fun_type)]
-        return result_type
+        assum.update(assum2)
+        cons = cons1.union(cons2)
+        cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsEq))
+        return result_type, assum, cons
     elif isinstance(node, Lambda):
         arg_type = TypeVariable()
-        new_env = env.copy()
-        new_env[node.v] = arg_type
-        new_non_generic = non_generic.copy()
-        new_non_generic.add(arg_type)
         node.body.add_m(arg_type)
-        result_type = analyse(node.body, new_env, new_non_generic)
-        return Function(arg_type, result_type)
+        result_type, assum, cons = analyse(node.body, env)
+        x_type = assum[node.v]
+        del assum[node.v]
+        cons.add(TypeConstraint(x_type, arg_type, ConsType.ConsEq))
+        return Function(arg_type, result_type), assum, cons
     elif isinstance(node, Let):
-        defn_type = analyse(node.defn, env, non_generic)
-        new_env = env.copy()
-        new_env[node.v] = defn_type
-        return analyse(node.body, new_env, non_generic)
+        defn_type, assum, cons1 = analyse(node.defn, env)
+        body_type, assum2, cons2 = analyse(node.body, env)
+        x_type = assum2[node.v]
+        assum.update(assum2)
+        del assum[node.v]
+        cons = cons1.union(cons2)
+        cons.add(TypeConstraint(x_type, defn_type, ConsType.ConsLess, node.m_set))
+        return body_type, assum, cons
     elif isinstance(node, Letrec):
         new_type = TypeVariable()
         new_env = env.copy()
@@ -287,8 +301,8 @@ def analyse(node, env, non_generic=None):
         new_non_generic.add(new_type)
         defn_type = analyse(node.defn, new_env, new_non_generic)
         # unify(new_type, defn_type)
-        constraint += [(new_type, defn_type)]
-        return analyse(node.body, new_env, non_generic)
+        constraint.append(TypeConstraint(new_type, defn_type, ConsType.ConsEq))
+        return analyse(node.body, new_env, non_generic), assum, cons
     assert 0, "Unhandled syntax node {0}".format(type(node))
 
 
@@ -417,7 +431,13 @@ def retrieve_type(node):
         return node
 
 def applyList(s, xs):
-    return [(apply(s, x), apply(s, y)) for (x, y) in xs]
+    res_list = []
+    for cons in xs:
+        if cons.ctype <= ConsType.ConsLess:
+            res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype))
+        else:
+            res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype, apply(s, cons.mid)))
+    return res_list
 
 class InferError(Exception):
     def __init__(self, ty1, ty2):
@@ -441,7 +461,8 @@ def unify(x, y):
     elif isinstance(x, TypeOperator) and isinstance(y, TypeOperator):
         if len(x.types) != len(y.types):
             return Exception("Wrong number of arguments")
-        s1 = solve(zip([x.types[0]], [y.types[0]]))
+        # s1 = solve(zip([x.types[0]], [y.types[0]]))
+        s1 = solve([TypeConstraint(x.types[0], x.types[1], ConsType.ConsEq)])
         s2 = unify(apply(s1, x.types[1]), apply(s1, y.types[1]))
         return compose(s2, s1)
     elif isinstance(x, TypeVariable):
@@ -455,8 +476,8 @@ def solve(xs):
     mgu = empty()
     cs = deque(xs)
     while len(cs):
-        (a, b) = cs.pop()
-        s = unify(a, b)
+        cons = cs.pop()
+        s = unify(cons.lhs, cons.rhs)
         mgu = compose(s, mgu)
         cs = deque(applyList(s, cs))
     return mgu
@@ -591,11 +612,17 @@ def try_exp(env, node):
     constraint = []
     print(str(node) + " : ", end=' ')
     try:
-        t = analyse(node, env)
-        print("\nconstraint: {}".format(constraint))
-        print("env: {}\n".format(env))
+        t, assum, cons = analyse(node, env)
+        print("\nassumption: {}".format(assum))
+        print("\nTotal cons: {}".format(len(cons)))
+        for item in assum:
+            if item not in env:
+                raise Exception("Undefined variables exist")
+            cons.add(TypeConstraint(env[assum], env[item], ConsType.ConsEq))
+        for con in cons:
+            print(con)
         print("str: {}\n".format(str(t)))
-        mgu = solve(constraint)
+        mgu = solve(cons)
         print("mgu: {}\n".format(mgu))
         infer_ty = apply(mgu, node)
         print("infer_ty: {}\n".format(infer_ty))
@@ -696,7 +723,9 @@ def main():
     ]
 
     # try_exp(my_env, Apply(Identifier("zero"), Identifier("4")))
-    try_exp(my_env, Let("f", Lambda("x", Identifier("x")), Apply(Identifier("f"), Identifier("4"))))
+    # try_exp(my_env, Let("f", Lambda("x", Identifier("x")), Apply(Identifier("f"), Identifier("4"))))
+    # try_exp(my_env, Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x"))))
+    try_exp(my_env, Lambda("m", Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x")))))
     # for example in examples:
     #     try_exp(my_env, example)
 
