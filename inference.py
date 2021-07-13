@@ -10,6 +10,7 @@
 
 from __future__ import print_function
 from enum import IntEnum
+import copy
 
 
 class ConsType(IntEnum):
@@ -29,7 +30,12 @@ class TypeConstraint(object):
             self.ctype = ConsType.ConsLessM
 
     def __str__(self):
-        return "lhs:{}, rhs:{}, type:{}, mid:{}".format(self.lhs, self.rhs, self.ctype, self.mid)
+        return "type:{}, lhs:{}, rhs:{}, mid:{}".format(self.ctype, self.lhs, self.rhs, self.mid)
+
+    def get_active_vars(self):
+        if self.ctype == ConsType.ConsLessM:
+            return free_type_variable(self.lhs).union(free_type_variable(self.mid).intersection(free_type_variable(self.rhs)))
+        return free_type_variable(self.lhs).union(free_type_variable(self.rhs))
 
 # =======================================================#
 # Class definitions for the abstract syntax tree nodes
@@ -185,9 +191,28 @@ class TypeVariable(object):
         return "TypeVariable(id = {0}, name={1})".format(self.id, self.name)
 
 
+class TypeScheme(object):
+    def __init__(self, name, quantified_types=[], type_op=None):
+        self.name = name
+        self.quantified_types = quantified_types
+        self.type_op = type_op
+
+    def instantiate(self):
+        new_types = []
+        for ty in self.type_op.types:
+            if ty in self.quantified_types:
+                new_types.append(TypeVariable())
+            else:
+                new_types.append(ty)
+        return TypeOperator(self.name, new_types)
+
+    def get_ftvs(self):
+        ftvs = self.type_op.get_ftvs()
+        return ftvs.difference(set(self.quantified_types))
+
+
 class TypeOperator(object):
     """An n-ary type constructor which builds a new type from old"""
-
     def __init__(self, name, types):
         self.name = name
         self.types = types
@@ -201,14 +226,55 @@ class TypeOperator(object):
         else:
             return "{0} {1}" .format(self.name, ' '.join(self.types))
 
+    def __repr__(self):
+        return self.__str__()
+
+    def generalize(self, env):
+        tyv_list = []
+        for ty in self.types:
+            if isinstance(ty, TypeVariable) and ty not in env:
+                tyv_list.append(ty)
+        type_scheme = TypeScheme(self.name, tyv_list, self)
+        return type_scheme
+
+    def get_ftvs(self):
+        ftvs = set()
+        for ty in self.types:
+            if isinstance(ty, TypeVariable):
+                ftvs.add(ty)
+        return ftvs
+
 
 class Function(TypeOperator):
     """A binary type constructor which builds function types"""
-
     def __init__(self, from_type, to_type):
         super(Function, self).__init__("->", [from_type, to_type])
 
 
+def free_type_variable(x):
+    if isinstance(x, TypeScheme):
+        return x.get_ftvs()
+    elif isinstance(x, TypeOperator):
+        return x.get_ftvs()
+    elif isinstance(x, set) or isinstance(x, list):
+        ftvs = set()
+        for e in x:
+            ftvs.union(free_type_variable(e))
+        return ftvs
+    return set()
+
+
+def instantiate(x):
+    if isinstance(x, TypeScheme):
+        return x.instantiate()
+    else:
+        return x
+
+def get_active_vars(cons):
+    atvs = set()
+    for c in cons:
+        atvs.union(c.get_active_vars())
+    return atvs
 
 def ftv(x):
     if isinstance(x, Function):
@@ -411,6 +477,11 @@ def apply(s, t):
         return Function(apply(s, t.types[0]), apply(s, t.types[1]))
     elif isinstance(t, TypeVariable):
         return s.get(t.name, t)
+    elif isinstance(t, set):
+        new_set = set()
+        for item in t:
+            new_set.add(apply(s, item))
+        return new_set
 
 def retrieve_type(node):
     if const_type(node) or isinstance(node, Identifier):
@@ -437,7 +508,7 @@ def applyList(s, xs):
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype))
         else:
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype, apply(s, cons.mid)))
-    return res_list
+    return res_list if isinstance(xs, list) else set(res_list)
 
 class InferError(Exception):
     def __init__(self, ty1, ty2):
@@ -481,6 +552,54 @@ def solve(xs):
         mgu = compose(s, mgu)
         cs = deque(applyList(s, cs))
     return mgu
+
+
+def split_cons(cons):
+    if len(cons) <= 1:
+        return list(cons)[0], set()
+    else:
+        next_le_cons = None
+        next_m_cons = None
+        for con in cons:
+            if con.ctype == ConsType.ConsEq:
+                cons.remove(con)
+                return con, cons
+            elif con.ctype == ConsType.ConsLess:
+                next_le_cons = con if next_le_cons is None else next_le_cons
+            else:
+                next_m_cons = con if next_m_cons is None else next_m_cons
+        next_con = next_m_cons if next_m_cons is not None else next_le_cons
+        cons.remove(next_con)
+        return next_con, cons
+
+def generalize(env, x):
+    if isinstance(x, TypeOperator):
+        return x.generalize(env)
+    else:
+        return x
+
+
+def solve_cons(cons):
+    # print("cur cons:{}".format(len(cons)))
+    if len(cons) == 0:
+        return dict()
+    else:
+        next_con, remain_cons = split_cons(cons)
+        # print("next_con: {}".format(next_con))
+        if next_con.ctype == ConsType.ConsEq:
+            mgu = unify(next_con.lhs, next_con.rhs)
+            return compose(solve_cons(applyList(mgu, remain_cons)), mgu)
+        elif next_con.ctype == ConsType.ConsLessM:
+            u = free_type_variable(next_con.rhs).difference(next_con.mid).intersection(get_active_vars(remain_cons))
+            if u is None or len(u) == 0:
+                new_cons = TypeConstraint(next_con.lhs, generalize(next_con.mid, next_con.rhs), ConsType.ConsLess)
+                remain_cons.add(new_cons)
+                return solve_cons(remain_cons)
+        else:
+            new_cons = TypeConstraint(next_con.lhs, instantiate(next_con.rhs), ConsType.ConsEq)
+            remain_cons.add(new_cons)
+            return solve_cons(remain_cons)
+
 
 def bind(n, x):
     if x == n:
@@ -615,6 +734,7 @@ def try_exp(env, node):
         t, assum, cons = analyse(node, env)
         print("\nassumption: {}".format(assum))
         print("\nTotal cons: {}".format(len(cons)))
+        # print("\nTotal cons: {}".format(cons))
         for item in assum:
             if item not in env:
                 raise Exception("Undefined variables exist")
@@ -623,7 +743,9 @@ def try_exp(env, node):
             print(con)
         print("str: {}\n".format(str(t)))
         mgu = solve(cons)
+        mgu1 = solve_cons(cons)
         print("mgu: {}\n".format(mgu))
+        print("mgu1: {}\n".format(mgu1))
         infer_ty = apply(mgu, node)
         print("infer_ty: {}\n".format(infer_ty))
         res = retrieve_type(infer_ty)
