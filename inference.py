@@ -273,21 +273,6 @@ def get_active_vars(cons):
     return atvs
 
 
-def ftv(x):
-    if isinstance(x, Function):
-        return ftv(x.types[0]) | ftv(x.types[1])
-    elif isinstance(x, Apply):
-        return ftv(x.fn) | ftv(x.arg)
-    elif isinstance(x, Let):
-        return ftv(x.body).set_A.difference(ftv(x.v))
-    # elif isinstance(x, TypeOperator):
-    #     return ftv(x.fn) | ftv(x.arg)
-    elif isinstance(x, TypeVariable):
-        return set([x])
-    else:
-        return set()
-
-
 # Basic types are constructed with a nullary type constructor
 Integer = TypeOperator("int", [])  # Basic integer
 Double = TypeOperator("double", [])  # Basic double
@@ -384,14 +369,15 @@ def analyse(node, env=None):
 
 
 ### == Constraint Solver ==
-from collections import deque
 def empty():
     return {}
+
 
 def const_type(x):
     if isinstance(x, TypeOperator) and len(x.types) == 0:
         return True
     return False
+
 
 def apply(s, t):
     if const_type(t) or isinstance(t, Identifier):
@@ -414,6 +400,7 @@ def apply(s, t):
             new_set.add(apply(s, item))
         return new_set
 
+
 def retrieve_type(node):
     if const_type(node) or isinstance(node, Identifier):
         return node
@@ -432,6 +419,7 @@ def retrieve_type(node):
     elif isinstance(node, TypeVariable):
         return node
 
+
 def applyList(s, xs):
     res_list = []
     for cons in xs:
@@ -440,6 +428,7 @@ def applyList(s, xs):
         else:
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype, apply(s, cons.mid)))
     return res_list if isinstance(xs, list) else set(res_list)
+
 
 class InferError(Exception):
     def __init__(self, ty1, ty2):
@@ -453,16 +442,20 @@ class InferError(Exception):
             "Expected: ", "\t" + str(self.ty2)
         ])
 
+
 def unify(x, y):
     if isinstance(x, Apply) and isinstance(y, Apply):
         s1 = unify(x.fn, y.fn)
         s2 = unify(apply(s1, x.arg), apply(s1, y.arg))
         return compose(s2, s1)
-    elif const_type(x) and const_type(y) and (x.name == y.name):
-        return empty()
+    elif const_type(x) and const_type(y):
+        if x.name == y.name:
+            return empty()
+        else:
+            raise InferenceError("Type mismatch: {} and {}".format(x, y))
     elif isinstance(x, TypeOperator) and isinstance(y, TypeOperator):
         if len(x.types) != len(y.types):
-            return Exception("Wrong number of arguments")
+            raise InferenceError("Wrong number of arguments")
         # s1 = solve(zip([x.types[0]], [y.types[0]]))
         s1 = solve_cons([TypeConstraint(x.types[0], y.types[0], ConsType.ConsEq)])
         s2 = unify(apply(s1, x.types[1]), apply(s1, y.types[1]))
@@ -527,17 +520,28 @@ def bind(n, x):
     if x == n:
         return empty()
     elif occurs_check(n, x):
-        raise InfiniteType(n, x)
+        raise InferenceError("recursive unification: {} and {}".format(n, x))
     else:
         return dict([(n, x)])
 
+
 def occurs_check(n, x):
-    return n in ftv(x)
+    # ftvs =
+    # print("occurs_check: {}, {}, {}".format(str(n), x, ftvs))
+    # if len(ftvs) > 0:
+    #     for ftv in ftvs:
+    #         print("ftv:{}, n:{}".format(ftv.name, n))
+    #         if ftv.name == n:
+    #             return True
+    # return False
+    return any(n == t.name for t in free_type_variable(x))
+
 
 def union(s1, s2):
     nenv = s1.copy()
     nenv.update(s2)
     return nenv
+
 
 def compose(s1, s2):
     s3 = dict((t, apply(s1, u)) for t, u in s2.items())
@@ -577,7 +581,7 @@ def try_exp(env, node):
         print("\nTotal cons: {}".format(len(cons)))
         for item in assum:
             if item not in env:
-                raise Exception("Undefined variables exist")
+                raise InferenceError("Undefined variables exist: {}".format(item))
             cons.add(TypeConstraint(env[assum], env[item], ConsType.ConsEq))
         for con in cons:
             print(con)
@@ -622,7 +626,7 @@ def main():
                        Apply(Identifier("f"),
                              Identifier("4"))),
                  Apply(Identifier("f"),
-                       Identifier("true")))
+                       Identifier("4")))
 
     examples = [
         # factorial
@@ -657,15 +661,15 @@ def main():
         #     Apply(Identifier("f"), Identifier("true"))),
 
         # let f = (fn x => x) in ((pair (f 4)) (f true))
-        # Let("f", Lambda("x", Identifier("x")), pair),
+        Let("f", Lambda("x", Identifier("x")), pair),
 
         # fn f => f f (fail)
         # Lambda("f", Apply(Identifier("f"), Identifier("f"))),
 
         # let g = fn f => 5 in g g
-        Let("g",
-            Lambda("f", Identifier("5")),
-            Apply(Identifier("g"), Identifier("g"))),
+        # Let("g",
+        #     Lambda("f", Identifier("5")),
+        #     Apply(Identifier("g"), Identifier("g"))),
 
         # example that demonstrates generic and non-generic variables:
         # fn g => let f = fn x => g in pair (f 3, f true)
