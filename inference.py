@@ -191,19 +191,33 @@ class TypeScheme(object):
         self.type_op = type_op
 
     def instantiate(self):
-        new_types = []
-        for ty in self.type_op.types:
-            if ty in self.quantified_types:
+        new_types = copy.deepcopy(self.type_op.types)
+        if len(self.quantified_types) > 0:
+            for ty in self.quantified_types:
                 new_type = TypeVariable()
                 print("Instantiate Name:{}".format(new_type))
-                new_types.append(new_type)
-            else:
-                new_types.append(ty)
+                for index in range(len(new_types)):
+                    if new_types[index] == ty:
+                        new_types[index] = new_type
+        # for ty in self.type_op.types:
+        #     if ty in self.quantified_types:
+        #         new_type = TypeVariable()
+        #         print("Instantiate Name:{}".format(new_type))
+        #         new_types.append(new_type)
+        #     else:
+        #         new_types.append(ty)
         return TypeOperator(self.name, new_types)
 
     def get_ftvs(self):
         ftvs = self.type_op.get_ftvs()
         return ftvs.difference(set(self.quantified_types))
+
+    def __str__(self):
+        quantified_dsp = [str(tp) for tp in self.quantified_types]
+        return "name:{}, quantified:{}, type:{}" .format(self.name, ' '.join(quantified_dsp), str(self.type_op))
+
+    def __repr__(self):
+        return self.__str__()
 
 
 class TypeOperator(object):
@@ -225,11 +239,11 @@ class TypeOperator(object):
         return self.__str__()
 
     def generalize(self, env):
-        tyv_list = []
+        tyv_set = set()
         for ty in self.types:
             if isinstance(ty, TypeVariable) and ty not in env:
-                tyv_list.append(ty)
-        type_scheme = TypeScheme(self.name, tyv_list, self)
+                tyv_set.add(ty)
+        type_scheme = TypeScheme(self.name, list(tyv_set), self)
         return type_scheme
 
     def get_ftvs(self):
@@ -310,7 +324,9 @@ def analyse(node, env=None):
     cons = set()   # constraints
     if isinstance(node, Identifier):
         if node.name in env:
-            v_type = env[node.name]
+            v_type = instantiate(env[node.name])
+            print("v_type:{}".format(str(v_type)))
+            # v_type = env[node.name]
         elif is_integer_literal(node.name):
             v_type = Integer
         else:
@@ -392,6 +408,8 @@ def apply(s, t):
         return Lambda(t.v, apply(s, t.body))
     elif isinstance(t, Function):
         return Function(apply(s, t.types[0]), apply(s, t.types[1]))
+    elif isinstance(t, TypeOperator):
+        return Function(apply(s, t.types[0]), apply(s, t.types[1]))
     elif isinstance(t, TypeVariable):
         return s.get(t.name, t)
     elif isinstance(t, set):
@@ -427,6 +445,10 @@ def applyList(s, xs):
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype))
         else:
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype, apply(s, cons.mid)))
+    # for res in xs:
+    #     print("pre res:{}".format(res))
+    # for res in res_list:
+    #     print("res:{}".format(res))
     return res_list if isinstance(xs, list) else set(res_list)
 
 
@@ -457,15 +479,22 @@ def unify(x, y):
         if len(x.types) != len(y.types):
             raise InferenceError("Wrong number of arguments")
         # s1 = solve(zip([x.types[0]], [y.types[0]]))
-        s1 = solve_cons([TypeConstraint(x.types[0], y.types[0], ConsType.ConsEq)])
+        new_cons = [TypeConstraint(x.types[0], y.types[0], ConsType.ConsEq)]
+        # print("\nNew cons: {}".format(str(new_cons[0])))
+        s1 = solve_cons(new_cons)
         s2 = unify(apply(s1, x.types[1]), apply(s1, y.types[1]))
+        # print("s2: {}".format(str(s2)))
         return compose(s2, s1)
     elif isinstance(x, TypeVariable):
         return bind(x.name, y)
     elif isinstance(y, TypeVariable):
         return bind(y.name, x)
     else:
-        raise InferError(x, y)
+        raise InferenceError('\n'.join([
+            "Type mismatch: ",
+            "Given: ", "\t" + str(x),
+            "Expected: ", "\t" + str(y)
+        ]))
 
 
 def split_cons(cons):
@@ -495,25 +524,29 @@ def generalize(env, x):
 
 
 def solve_cons(cons):
-    # print("cur cons:{}".format(len(cons)))
+    # print("solve_cons cons:{}".format(cons))
+    # for con in cons:
+    #     print(con)
     if len(cons) == 0:
-        return dict()
+        s = dict()
     else:
         next_con, remain_cons = split_cons(cons)
         # print("next_con: {}".format(next_con))
         if next_con.ctype == ConsType.ConsEq:
             mgu = unify(next_con.lhs, next_con.rhs)
-            return compose(solve_cons(applyList(mgu, remain_cons)), mgu)
+            s = compose(solve_cons(applyList(mgu, remain_cons)), mgu)
         elif next_con.ctype == ConsType.ConsLessM:
             u = free_type_variable(next_con.rhs).difference(next_con.mid).intersection(get_active_vars(remain_cons))
             if u is None or len(u) == 0:
                 new_cons = TypeConstraint(next_con.lhs, generalize(next_con.mid, next_con.rhs), ConsType.ConsLess)
                 remain_cons.add(new_cons)
-                return solve_cons(remain_cons)
+                s = solve_cons(remain_cons)
         else:
             new_cons = TypeConstraint(next_con.lhs, instantiate(next_con.rhs), ConsType.ConsEq)
             remain_cons.add(new_cons)
-            return solve_cons(remain_cons)
+            s = solve_cons(remain_cons)
+    # print("current substitution: {}".format(s))
+    return s
 
 
 def bind(n, x):
@@ -545,6 +578,7 @@ def union(s1, s2):
 
 def compose(s1, s2):
     s3 = dict((t, apply(s1, u)) for t, u in s2.items())
+    # print("s1:{}, s2:{}, s3:{}".format(s1, s2, union(s1, s3)))
     return union(s1, s3)
 
 
@@ -571,6 +605,10 @@ def try_exp(env, node):
     Returns:
         None
     """
+    print("env:")
+    for e in env:
+        print("{}: {}".format(e, env[e]))
+    print('\n')
     global constraint
     constraint = []
     print(str(node) + " : ", end=' ')
@@ -578,7 +616,7 @@ def try_exp(env, node):
     try:
         t, assum, cons = analyse(node, env)
         print("\nassumption: {}".format(assum))
-        print("\nTotal cons: {}".format(len(cons)))
+        print("\nInitial cons: {}".format(len(cons)))
         for item in assum:
             if item not in env:
                 raise InferenceError("Undefined variables exist: {}".format(item))
@@ -613,6 +651,7 @@ def main():
     pair_type = TypeOperator("*", (var1, var2))
 
     var3 = TypeVariable()
+    var4 = TypeVariable()
 
     my_env = {"pair": Function(var1, Function(var2, pair_type)),
               "true": Bool,
@@ -620,6 +659,8 @@ def main():
               "zero": Function(Integer, Bool),
               "pred": Function(Integer, Integer),
               "add": Function(Integer, Function(Integer, Integer)),
+              "test_f": generalize({}, Function(var4, var4)),
+              "merge": Function(Integer, Function(Bool, Bool)),
               "times": Function(Integer, Function(Integer, Integer))}
 
     pair = Apply(Apply(Identifier("pair"),
@@ -661,7 +702,11 @@ def main():
         #     Apply(Identifier("f"), Identifier("true"))),
 
         # let f = (fn x => x) in ((pair (f 4)) (f true))
-        Let("f", Lambda("x", Identifier("x")), pair),
+        # Let("f", Lambda("x", Identifier("x")), pair),
+
+        # Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))),
+        Apply(Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))), Apply(Identifier("test_f"), Identifier("true"))),
+        # Apply(Identifier("test_f"), Apply(Identifier("test_f"), Identifier("4"))),
 
         # fn f => f f (fail)
         # Lambda("f", Apply(Identifier("f"), Identifier("f"))),
