@@ -11,7 +11,7 @@
 from __future__ import print_function
 from enum import IntEnum
 import copy
-from inference_logger import log_content
+from inference_logger import log_content, log_perm
 
 
 class ConsType(IntEnum):
@@ -352,12 +352,7 @@ def analyse(node, env=None):
         result_type = TypeVariable()
         log_content("Node Apply, result name: {}".format(result_type))
         cons = cons1.union(cons2)
-        # same_keys = set(assum.keys()).intersection(assum2.keys())
-        # if len(same_keys) > 0:
-        #     for k in same_keys:
-        #         cons.add(TypeConstraint(assum[k], assum2[k], ConsType.ConsEq))
-        # assum.update(assum2)
-        assum = merge_assum(assum, assum2)
+        assum = merge_assum(assum, assum2)  # update assum
         cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsEq))
         return result_type, assum, cons
     elif isinstance(node, Lambda):
@@ -376,12 +371,7 @@ def analyse(node, env=None):
         body_type, assum2, cons2 = analyse(node.body, env)
         x_type = assum2[node.v]
         cons = cons1.union(cons2)
-        # same_keys = set(assum.keys()).intersection(assum2.keys())
-        # if len(same_keys) > 0:
-        #     for k in same_keys:
-        #         cons.add(TypeConstraint(assum[k], assum2[k], ConsType.ConsEq))
-        # assum.update(assum2)
-        assum = merge_assum(assum, assum2)
+        assum = merge_assum(assum, assum2)  # update assum
         del assum[node.v]
         if isinstance(x_type, list):
             for x_tp in x_type:
@@ -591,7 +581,7 @@ def is_integer_literal(name):
 # ==================================================================#
 # Example code to exercise the above
 def infer_exp(env, node):
-    log_content("node info: {}\n".format(str(node)))
+    log_perm("node info: {}".format(str(node)))
     log_content("Top env:")
     for e in env:
         log_content("{}: {}".format(e, env[e]))
@@ -612,7 +602,7 @@ def infer_exp(env, node):
         log_content("mgu: {}\n".format(mgu))
         infer_ty = apply(mgu, t)
         log_content("Inferred type str: {}".format(str(t)))
-        log_content("Inferred value: {}".format(infer_ty))
+        log_perm("Inferred value: {}".format(infer_ty))
         return infer_ty, mgu
     except (ParseError, InferenceError) as e:
         log_content(e)

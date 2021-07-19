@@ -24,12 +24,13 @@ class InfLogger(object):
             self.logger.addHandler(ch)
             InfLogger.__instance = self
 
-    def log_content(self, content):
-        self.logger.info(content)
-
 
 def log_content(content):
-    InfLogger.getInstance().log_content(content)
+    InfLogger.getInstance().logger.info(content)
+
+
+def log_perm(content):
+    InfLogger.getInstance().logger.error(content)
 
 
 def set_level(level=logging.INFO):
