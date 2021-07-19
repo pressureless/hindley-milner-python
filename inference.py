@@ -10,7 +10,6 @@
 
 from __future__ import print_function
 from enum import IntEnum
-import logging
 import copy
 from inference_logger import log_content
 
@@ -41,7 +40,6 @@ class TypeConstraint(object):
 
 # =======================================================#
 # Class definitions for the abstract syntax tree nodes
-
 class AstTreeNode(object):
     def __init__(self):
         self.m_set = set()   # monomorphic set
@@ -126,7 +124,6 @@ class Letrec(AstTreeNode):
 
 # =======================================================#
 # Exception types
-
 class InferenceError(Exception):
     """Raised if the type inference algorithm cannot infer types successfully"""
     def __init__(self, message):
@@ -151,7 +148,6 @@ class ParseError(Exception):
 
 # =======================================================#
 # Types and type constructors
-
 class TypeVariable(object):
     """A type variable standing for an arbitrary type.
     All type variables have a unique id, but names are only assigned lazily,
@@ -172,7 +168,7 @@ class TypeVariable(object):
         present after analysis consume names.
         """
         if self.__name is None:
-            self.__name = TypeVariable.next_variable_name
+            self.__name = '_' + TypeVariable.next_variable_name
             TypeVariable.next_variable_name = chr(ord(TypeVariable.next_variable_name) + 1)
         return self.__name
 
@@ -197,17 +193,11 @@ class TypeScheme(object):
         if len(self.quantified_types) > 0:
             for ty in self.quantified_types:
                 new_type = TypeVariable()
-                log_content("Instantiate Name:{}".format(new_type))
+                log_content("Instantiate TypeScheme, {} -> {}".format(ty, new_type))
                 for index in range(len(new_types)):
                     if new_types[index].id == ty.id:
+                        # todo: high order function
                         new_types[index] = new_type
-        # for ty in self.type_op.types:
-        #     if ty in self.quantified_types:
-        #         new_type = TypeVariable()
-        #         log_content("Instantiate Name:{}".format(new_type))
-        #         new_types.append(new_type)
-        #     else:
-        #         new_types.append(ty)
         return TypeOperator(self.name, new_types)
 
     def get_ftvs(self):
@@ -298,6 +288,26 @@ Bool = TypeOperator("bool", [])  # Basic bool
 # =======================================================#
 # Type inference machinery
 constraint = []
+
+
+def merge_assum(lhs, rhs):
+    # log_content("merge_assum, lhs:{}, rhs:{}".format(lhs, rhs))
+    same_keys = set(lhs.keys()).intersection(rhs.keys())
+    same_dict = {}
+    if len(same_keys) > 0:
+        def get_list(value):
+            if isinstance(value, list):
+                return value
+            else:
+                return [value]
+        for k in same_keys:
+            same_dict[k] = get_list(lhs[k]) + get_list(rhs[k])
+    lhs.update(rhs)
+    lhs.update(same_dict)
+    # log_content("merge_assum, result:{}".format(lhs))
+    return lhs
+
+
 def analyse(node, env=None):
     """Computes the type of the expression given by node.
 
@@ -327,26 +337,27 @@ def analyse(node, env=None):
     if isinstance(node, Identifier):
         if node.name in env:
             v_type = instantiate(env[node.name])
-            log_content("v_type:{}".format(str(v_type)))
+            log_content("Node Identifier, v_type:{}".format(str(v_type)))
             # v_type = env[node.name]
         elif is_integer_literal(node.name):
             v_type = Integer
         else:
             v_type = TypeVariable()
             assum[node.name] = v_type
-            log_content("Identifier Name {}:{}".format(node.name, v_type))
+            log_content("Node Identifier, Name {}:{}".format(node.name, v_type))
         return v_type, assum, cons
     elif isinstance(node, Apply):
         fun_type, assum, cons1 = analyse(node.fn, env)
         arg_type, assum2, cons2 = analyse(node.arg, env)
         result_type = TypeVariable()
-        log_content("Apply Name: {}".format(result_type))
+        log_content("Node Apply, result name: {}".format(result_type))
         cons = cons1.union(cons2)
-        same_keys = set(assum.keys()).intersection(assum2.keys())
-        if len(same_keys) > 0:
-            for k in same_keys:
-                cons.add(TypeConstraint(assum[k], assum2[k], ConsType.ConsEq))
-        assum.update(assum2)
+        # same_keys = set(assum.keys()).intersection(assum2.keys())
+        # if len(same_keys) > 0:
+        #     for k in same_keys:
+        #         cons.add(TypeConstraint(assum[k], assum2[k], ConsType.ConsEq))
+        # assum.update(assum2)
+        assum = merge_assum(assum, assum2)
         cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsEq))
         return result_type, assum, cons
     elif isinstance(node, Lambda):
@@ -358,20 +369,25 @@ def analyse(node, env=None):
             x_type = assum[node.v]
             del assum[node.v]
             cons.add(TypeConstraint(x_type, arg_type, ConsType.ConsEq))
-        log_content("Lambda Name {}:{}".format(node.v, arg_type))
+        log_content("Node Lambda, arg name {}:{}".format(node.v, arg_type))
         return Function(arg_type, result_type), assum, cons
     elif isinstance(node, Let):
         defn_type, assum, cons1 = analyse(node.defn, env)
         body_type, assum2, cons2 = analyse(node.body, env)
         x_type = assum2[node.v]
         cons = cons1.union(cons2)
-        same_keys = set(assum.keys()).intersection(assum2.keys())
-        if len(same_keys) > 0:
-            for k in same_keys:
-                cons.add(TypeConstraint(assum[k], assum2[k], ConsType.ConsEq))
-        assum.update(assum2)
+        # same_keys = set(assum.keys()).intersection(assum2.keys())
+        # if len(same_keys) > 0:
+        #     for k in same_keys:
+        #         cons.add(TypeConstraint(assum[k], assum2[k], ConsType.ConsEq))
+        # assum.update(assum2)
+        assum = merge_assum(assum, assum2)
         del assum[node.v]
-        cons.add(TypeConstraint(x_type, defn_type, ConsType.ConsLess, node.m_set))
+        if isinstance(x_type, list):
+            for x_tp in x_type:
+                cons.add(TypeConstraint(x_tp, defn_type, ConsType.ConsLess, node.m_set))
+        else:
+            cons.add(TypeConstraint(x_type, defn_type, ConsType.ConsLess, node.m_set))
         return body_type, assum, cons
     elif isinstance(node, Letrec):
         new_type = TypeVariable()
@@ -412,6 +428,9 @@ def apply(s, t):
         return Function(apply(s, t.types[0]), apply(s, t.types[1]))
     elif isinstance(t, TypeOperator):
         return Function(apply(s, t.types[0]), apply(s, t.types[1]))
+    elif isinstance(t, TypeScheme):
+        # todo: apply to typescheme
+        return t
     elif isinstance(t, TypeVariable):
         return s.get(t.name, t)
     elif isinstance(t, set):
@@ -419,28 +438,16 @@ def apply(s, t):
         for item in t:
             new_set.add(apply(s, item))
         return new_set
-
-
-def retrieve_type(node):
-    if const_type(node) or isinstance(node, Identifier):
-        return node
-    elif isinstance(node, Apply):
-        return retrieve_type(node.fn)
-    elif isinstance(node, Let):
-        return retrieve_type(node.body)
-    elif isinstance(node, Letrec):
-        return retrieve_type(node.body)
-    elif isinstance(node, Lambda):
-        return node
-    elif isinstance(node, Function):
-        return node.types[-1]
-    elif isinstance(node, TypeOperator):
-        return node
-    elif isinstance(node, TypeVariable):
-        return node
+    else:
+        return t
 
 
 def applyList(s, xs):
+    """ Apply substitution on a list of constraints
+    :param s: substitution
+    :param xs: list of constraints
+    :return: new list
+    """
     res_list = []
     for cons in xs:
         if cons.ctype <= ConsType.ConsLess:
@@ -452,19 +459,6 @@ def applyList(s, xs):
     # for res in res_list:
     #     log_content("res:{}".format(res))
     return res_list if isinstance(xs, list) else set(res_list)
-
-
-class InferError(Exception):
-    def __init__(self, ty1, ty2):
-        self.ty1 = ty1
-        self.ty2 = ty2
-
-    def __str__(self):
-        return '\n'.join([
-            "Type mismatch: ",
-            "Given: ", "\t" + str(self.ty1),
-            "Expected: ", "\t" + str(self.ty2)
-        ])
 
 
 def unify(x, y):
@@ -519,6 +513,7 @@ def split_cons(cons):
 
 
 def generalize(env, x):
+    # todo: high order function
     if isinstance(x, TypeOperator):
         return x.generalize(env)
     else:
@@ -595,29 +590,17 @@ def is_integer_literal(name):
 
 # ==================================================================#
 # Example code to exercise the above
-
-
-def try_exp(env, node):
-    """Try to evaluate a type log_contenting the result or reporting errors.
-
-    Args:
-        env: The type environment in which to evaluate the expression.
-        node: The root node of the abstract syntax tree of the expression.
-
-    Returns:
-        None
-    """
-    log_content("env:")
+def infer_exp(env, node):
+    log_content("node info: {}\n".format(str(node)))
+    log_content("Top env:")
     for e in env:
         log_content("{}: {}".format(e, env[e]))
-    log_content('\n')
+    log_content("")
     global constraint
     constraint = []
-    log_content(str(node) + " : ")
-    log_content('\n')
     try:
         t, assum, cons = analyse(node, env)
-        log_content("\nassumption: {}".format(assum))
+        log_content("\nFinal assumption: {}".format(assum))
         log_content("\nInitial cons: {}".format(len(cons)))
         for item in assum:
             if item not in env:
@@ -628,11 +611,9 @@ def try_exp(env, node):
         mgu = solve_cons(cons)
         log_content("mgu: {}\n".format(mgu))
         infer_ty = apply(mgu, t)
-        log_content("infer_ty str  : {}".format(str(t)))
-        log_content("infer_ty value: {}".format(infer_ty))
-        res = retrieve_type(infer_ty)
-        log_content("res: {}\n".format(res))
-        return infer_ty
+        log_content("Inferred type str: {}".format(str(t)))
+        log_content("Inferred value: {}".format(infer_ty))
+        return infer_ty, mgu
     except (ParseError, InferenceError) as e:
         log_content(e)
 
@@ -656,7 +637,7 @@ def main():
     var3 = TypeVariable()
     var4 = TypeVariable()
 
-    my_env = {"pair": Function(var1, Function(var2, pair_type)),
+    my_env = {"pair": generalize({}, Function(var1, Function(var2, pair_type))),
               "true": Bool,
               "cond": Function(Bool, Function(var3, Function(var3, var3))),
               "zero": Function(Integer, Bool),
@@ -706,9 +687,11 @@ def main():
 
         # let f = (fn x => x) in ((pair (f 4)) (f true))
         # Let("f", Lambda("x", Identifier("x")), pair),
+        Let("f", Lambda("x", Identifier("x")),
+            Apply(Apply(Identifier("merge"), Apply(Identifier("f"), Identifier("3"))), Apply(Identifier("f"), Identifier("true")))),
 
         # Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))),
-        Apply(Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))), Apply(Identifier("test_f"), Identifier("true"))),
+        # Apply(Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))), Apply(Identifier("test_f"), Identifier("true"))),
         # Apply(Identifier("test_f"), Apply(Identifier("test_f"), Identifier("4"))),
 
         # fn f => f f (fail)
@@ -735,13 +718,15 @@ def main():
         # Lambda("f", Lambda("g", Lambda("arg", Apply(Identifier("g"), Apply(Identifier("f"), Identifier("arg"))))))
     ]
 
-    # try_exp(my_env, Apply(Identifier("zero"), Identifier("4")))
-    # try_exp(my_env, Let("f", Lambda("x", Identifier("x")), Apply(Identifier("f"), Identifier("4"))))
-    # try_exp(my_env, Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x"))))
-    # try_exp(my_env, Lambda("m", Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x")))))
-    # try_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x")), Identifier("3")))))
+    # infer_exp(my_env, Apply(Identifier("zero"), Identifier("4")))
+    # infer_exp(my_env, Let("f", Lambda("x", Identifier("x")), Apply(Identifier("f"), Identifier("4"))))
+    # infer_exp(my_env, Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x"))))
+    # infer_exp(my_env, Lambda("m", Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x")))))
+
+    # my_env["x3"] = TypeVariable()
+    # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))
     for example in examples:
-        try_exp(my_env, example)
+        infer_exp(my_env, example)
 
 
 if __name__ == '__main__':
