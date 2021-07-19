@@ -10,7 +10,9 @@
 
 from __future__ import print_function
 from enum import IntEnum
+import logging
 import copy
+from inference_logger import log_content
 
 
 class ConsType(IntEnum):
@@ -195,14 +197,14 @@ class TypeScheme(object):
         if len(self.quantified_types) > 0:
             for ty in self.quantified_types:
                 new_type = TypeVariable()
-                print("Instantiate Name:{}".format(new_type))
+                log_content("Instantiate Name:{}".format(new_type))
                 for index in range(len(new_types)):
-                    if new_types[index] == ty:
+                    if new_types[index].id == ty.id:
                         new_types[index] = new_type
         # for ty in self.type_op.types:
         #     if ty in self.quantified_types:
         #         new_type = TypeVariable()
-        #         print("Instantiate Name:{}".format(new_type))
+        #         log_content("Instantiate Name:{}".format(new_type))
         #         new_types.append(new_type)
         #     else:
         #         new_types.append(ty)
@@ -325,20 +327,20 @@ def analyse(node, env=None):
     if isinstance(node, Identifier):
         if node.name in env:
             v_type = instantiate(env[node.name])
-            print("v_type:{}".format(str(v_type)))
+            log_content("v_type:{}".format(str(v_type)))
             # v_type = env[node.name]
         elif is_integer_literal(node.name):
             v_type = Integer
         else:
             v_type = TypeVariable()
             assum[node.name] = v_type
-            print("Identifier Name {}:{}".format(node.name, v_type))
+            log_content("Identifier Name {}:{}".format(node.name, v_type))
         return v_type, assum, cons
     elif isinstance(node, Apply):
         fun_type, assum, cons1 = analyse(node.fn, env)
         arg_type, assum2, cons2 = analyse(node.arg, env)
         result_type = TypeVariable()
-        print("Apply Name: {}".format(result_type))
+        log_content("Apply Name: {}".format(result_type))
         cons = cons1.union(cons2)
         same_keys = set(assum.keys()).intersection(assum2.keys())
         if len(same_keys) > 0:
@@ -356,7 +358,7 @@ def analyse(node, env=None):
             x_type = assum[node.v]
             del assum[node.v]
             cons.add(TypeConstraint(x_type, arg_type, ConsType.ConsEq))
-        print("Lambda Name {}:{}".format(node.v, arg_type))
+        log_content("Lambda Name {}:{}".format(node.v, arg_type))
         return Function(arg_type, result_type), assum, cons
     elif isinstance(node, Let):
         defn_type, assum, cons1 = analyse(node.defn, env)
@@ -446,9 +448,9 @@ def applyList(s, xs):
         else:
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype, apply(s, cons.mid)))
     # for res in xs:
-    #     print("pre res:{}".format(res))
+    #     log_content("pre res:{}".format(res))
     # for res in res_list:
-    #     print("res:{}".format(res))
+    #     log_content("res:{}".format(res))
     return res_list if isinstance(xs, list) else set(res_list)
 
 
@@ -480,10 +482,10 @@ def unify(x, y):
             raise InferenceError("Wrong number of arguments")
         # s1 = solve(zip([x.types[0]], [y.types[0]]))
         new_cons = [TypeConstraint(x.types[0], y.types[0], ConsType.ConsEq)]
-        # print("\nNew cons: {}".format(str(new_cons[0])))
+        # log_content("\nNew cons: {}".format(str(new_cons[0])))
         s1 = solve_cons(new_cons)
         s2 = unify(apply(s1, x.types[1]), apply(s1, y.types[1]))
-        # print("s2: {}".format(str(s2)))
+        # log_content("s2: {}".format(str(s2)))
         return compose(s2, s1)
     elif isinstance(x, TypeVariable):
         return bind(x.name, y)
@@ -524,14 +526,14 @@ def generalize(env, x):
 
 
 def solve_cons(cons):
-    # print("solve_cons cons:{}".format(cons))
+    # log_content("solve_cons cons:{}".format(cons))
     # for con in cons:
-    #     print(con)
+    #     log_content(con)
     if len(cons) == 0:
         s = dict()
     else:
         next_con, remain_cons = split_cons(cons)
-        # print("next_con: {}".format(next_con))
+        # log_content("next_con: {}".format(next_con))
         if next_con.ctype == ConsType.ConsEq:
             mgu = unify(next_con.lhs, next_con.rhs)
             s = compose(solve_cons(applyList(mgu, remain_cons)), mgu)
@@ -545,7 +547,7 @@ def solve_cons(cons):
             new_cons = TypeConstraint(next_con.lhs, instantiate(next_con.rhs), ConsType.ConsEq)
             remain_cons.add(new_cons)
             s = solve_cons(remain_cons)
-    # print("current substitution: {}".format(s))
+    # log_content("current substitution: {}".format(s))
     return s
 
 
@@ -560,10 +562,10 @@ def bind(n, x):
 
 def occurs_check(n, x):
     # ftvs =
-    # print("occurs_check: {}, {}, {}".format(str(n), x, ftvs))
+    # log_content("occurs_check: {}, {}, {}".format(str(n), x, ftvs))
     # if len(ftvs) > 0:
     #     for ftv in ftvs:
-    #         print("ftv:{}, n:{}".format(ftv.name, n))
+    #         log_content("ftv:{}, n:{}".format(ftv.name, n))
     #         if ftv.name == n:
     #             return True
     # return False
@@ -578,7 +580,7 @@ def union(s1, s2):
 
 def compose(s1, s2):
     s3 = dict((t, apply(s1, u)) for t, u in s2.items())
-    # print("s1:{}, s2:{}, s3:{}".format(s1, s2, union(s1, s3)))
+    # log_content("s1:{}, s2:{}, s3:{}".format(s1, s2, union(s1, s3)))
     return union(s1, s3)
 
 
@@ -596,7 +598,7 @@ def is_integer_literal(name):
 
 
 def try_exp(env, node):
-    """Try to evaluate a type printing the result or reporting errors.
+    """Try to evaluate a type log_contenting the result or reporting errors.
 
     Args:
         env: The type environment in which to evaluate the expression.
@@ -605,33 +607,34 @@ def try_exp(env, node):
     Returns:
         None
     """
-    print("env:")
+    log_content("env:")
     for e in env:
-        print("{}: {}".format(e, env[e]))
-    print('\n')
+        log_content("{}: {}".format(e, env[e]))
+    log_content('\n')
     global constraint
     constraint = []
-    print(str(node) + " : ", end=' ')
-    print('\n')
+    log_content(str(node) + " : ")
+    log_content('\n')
     try:
         t, assum, cons = analyse(node, env)
-        print("\nassumption: {}".format(assum))
-        print("\nInitial cons: {}".format(len(cons)))
+        log_content("\nassumption: {}".format(assum))
+        log_content("\nInitial cons: {}".format(len(cons)))
         for item in assum:
             if item not in env:
                 raise InferenceError("Undefined variables exist: {}".format(item))
             cons.add(TypeConstraint(env[assum], env[item], ConsType.ConsEq))
         for con in cons:
-            print(con)
+            log_content(con)
         mgu = solve_cons(cons)
-        print("mgu: {}\n".format(mgu))
+        log_content("mgu: {}\n".format(mgu))
         infer_ty = apply(mgu, t)
-        print("infer_ty str  : {}".format(str(t)))
-        print("infer_ty value: {}".format(infer_ty))
+        log_content("infer_ty str  : {}".format(str(t)))
+        log_content("infer_ty value: {}".format(infer_ty))
         res = retrieve_type(infer_ty)
-        print("res: {}\n".format(res))
+        log_content("res: {}\n".format(res))
+        return infer_ty
     except (ParseError, InferenceError) as e:
-        print(e)
+        log_content(e)
 
 
 def main():
@@ -639,7 +642,7 @@ def main():
 
     Sets up some predefined types using the type constructors TypeVariable,
     TypeOperator and Function.  Creates a list of example expressions to be
-    evaluated. Evaluates the expressions, printing the type or errors arising
+    evaluated. Evaluates the expressions, log_contenting the type or errors arising
     from each.
 
     Returns:
@@ -667,7 +670,7 @@ def main():
                        Apply(Identifier("f"),
                              Identifier("4"))),
                  Apply(Identifier("f"),
-                       Identifier("4")))
+                       Identifier("true")))
 
     examples = [
         # factorial
