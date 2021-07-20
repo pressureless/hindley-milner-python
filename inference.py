@@ -191,13 +191,17 @@ class TypeScheme(object):
     def instantiate(self):
         new_types = copy.deepcopy(self.type_op.types)
         if len(self.quantified_types) > 0:
+            ty_dict = {}
             for ty in self.quantified_types:
                 new_type = TypeVariable()
+                ty_dict[ty.id] = new_type
                 log_content("Instantiate TypeScheme, {} -> {}".format(ty, new_type))
-                for index in range(len(new_types)):
-                    if new_types[index].id == ty.id:
-                        # todo: high order function
-                        new_types[index] = new_type
+            for index in range(len(new_types)):
+                if isinstance(new_types[index], TypeOperator):
+                    new_types[index].instantiate(ty_dict)
+                else:
+                    if new_types[index].id in ty_dict:
+                        new_types[index] = ty_dict[new_types[index].id] 
         return TypeOperator(self.name, new_types)
 
     def get_ftvs(self):
@@ -232,17 +236,38 @@ class TypeOperator(object):
 
     def generalize(self, env):
         tyv_set = set()
-        for ty in self.types:
-            if isinstance(ty, TypeVariable) and ty not in env:
+        ftvs = self.get_ftvs()
+        for ty in ftvs:
+            if ty.name not in env:
                 tyv_set.add(ty)
+        log_content("Generalize ftvs: {}".format(ftvs))
         type_scheme = TypeScheme(self.name, list(tyv_set), self)
         return type_scheme
+
+    def instantiate(self, ty_dict):
+        if len(self.types) > 0:
+            def modify_types():
+                for cur_index in range(len(self.types)):
+                    if isinstance(self.types[cur_index], TypeOperator):
+                        self.types[cur_index].instantiate(ty_dict)
+                    else:
+                        if self.types[cur_index].id in ty_dict:
+                            self.types[cur_index] = ty_dict[self.types[cur_index].id]
+            if isinstance(self.types, list):
+                modify_types()
+            elif isinstance(self.types, tuple):
+                self.types = list(self.types)
+                modify_types()
+                self.types = tuple(self.types)
 
     def get_ftvs(self):
         ftvs = set()
         for ty in self.types:
             if isinstance(ty, TypeVariable):
                 ftvs.add(ty)
+            elif isinstance(ty, TypeOperator):
+                # type operator
+                ftvs = ftvs.union(ty.get_ftvs())
         return ftvs
 
 
@@ -337,7 +362,7 @@ def analyse(node, env=None):
     if isinstance(node, Identifier):
         if node.name in env:
             v_type = instantiate(env[node.name])
-            log_content("Node Identifier, v_type:{}".format(str(v_type)))
+            log_content("Node Identifier, existed {}:{}".format(node.name, str(v_type)))
             # v_type = env[node.name]
         elif is_integer_literal(node.name):
             v_type = Integer
@@ -510,7 +535,6 @@ def split_cons(cons):
 
 
 def generalize(env, x):
-    # todo: high order function
     if isinstance(x, TypeOperator):
         return x.generalize(env)
     else:
@@ -636,12 +660,14 @@ def main():
 
     my_env = {"pair": generalize({}, Function(var1, Function(var2, pair_type))),
               "true": Bool,
+              # "f": Function(TypeVariable(), TypeVariable()) ,
               "cond": Function(Bool, Function(var3, Function(var3, var3))),
               "zero": Function(Integer, Bool),
               "pred": Function(Integer, Integer),
               "add": Function(Integer, Function(Integer, Integer)),
               "test_f": generalize({}, Function(var4, var4)),
               "merge": Function(Integer, Function(Bool, Bool)),
+              "aa": generalize({}, Function(var2, Function(TypeVariable(),  Function(TypeVariable(), TypeVariable())))),
               "times": Function(Integer, Function(Integer, Integer))}
 
     pair = Apply(Apply(Identifier("pair"),
@@ -652,22 +678,22 @@ def main():
 
     examples = [
         # factorial
-        Letrec("factorial",  # letrec factorial =
-               Lambda("n",  # fn n =>
-                      Apply(
-                          Apply(  # cond (zero n) 1
-                              Apply(Identifier("cond"),  # cond (zero n)
-                                    Apply(Identifier("zero"), Identifier("n"))),
-                              Identifier("1")),
-                          Apply(  # times n
-                              Apply(Identifier("times"), Identifier("n")),
-                              Apply(Identifier("factorial"),
-                                    Apply(Identifier("pred"), Identifier("n")))
-                          )
-                      )
-                      ),  # in
-               Apply(Identifier("factorial"), Identifier("5"))
-               ),
+        # Letrec("factorial",  # letrec factorial =
+        #        Lambda("n",  # fn n =>
+        #               Apply(
+        #                   Apply(  # cond (zero n) 1
+        #                       Apply(Identifier("cond"),  # cond (zero n)
+        #                             Apply(Identifier("zero"), Identifier("n"))),
+        #                       Identifier("1")),
+        #                   Apply(  # times n
+        #                       Apply(Identifier("times"), Identifier("n")),
+        #                       Apply(Identifier("factorial"),
+        #                             Apply(Identifier("pred"), Identifier("n")))
+        #                   )
+        #               )
+        #               ),  # in
+        #        Apply(Identifier("factorial"), Identifier("5"))
+        #        ),
 
         # Should fail:
         # fn x => (pair(x(3) (x(true)))
@@ -675,7 +701,10 @@ def main():
         #        Apply(
         #            Apply(Identifier("pair"),
         #                  Apply(Identifier("x"), Identifier("3"))),
-        #            Apply(Identifier("x"), Identifier("true")))),
+        #            Apply(Identifier("x"), Identifier("3")))),
+        # Apply(
+        #     Apply(Identifier("aa"), Identifier("3")),
+        #     Identifier("3")),
 
         # pair(f(3), f(true))
         # Apply(
@@ -683,7 +712,7 @@ def main():
         #     Apply(Identifier("f"), Identifier("true"))),
 
         # let f = (fn x => x) in ((pair (f 4)) (f true))
-        # Let("f", Lambda("x", Identifier("x")), pair),
+        Let("f", Lambda("x", Identifier("x")), pair),
         # Let("f", Lambda("x", Identifier("x")),
         #     Apply(Apply(Identifier("merge"), Apply(Identifier("f"), Identifier("3"))), Apply(Identifier("f"), Identifier("true")))),
 
@@ -719,6 +748,13 @@ def main():
     # infer_exp(my_env, Let("f", Lambda("x", Identifier("x")), Apply(Identifier("f"), Identifier("4"))))
     # infer_exp(my_env, Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x"))))
     # infer_exp(my_env, Lambda("m", Let("y", Identifier("m"), Let("x", Apply(Identifier("y"), Identifier("4")), Identifier("x")))))
+
+    # log_content("Top env:")
+    # for e in my_env:
+    #     log_content("{}: {}".format(e, my_env[e]))
+    # log_content("")
+
+
 
     # my_env["x3"] = TypeVariable()
     # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))

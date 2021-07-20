@@ -42,6 +42,12 @@ class BasePythonTest(unittest.TestCase):
         z_ty = apply(mgu, my_env['z'])
         self.assertEqualOperator(z_ty, Integer)
 
+    def test_inference3(self):
+        my_env = {}
+        example = Let("g", Lambda("f", Identifier("5")), Apply(Identifier("g"), Identifier("g")))
+        ty, mgu = infer_exp(my_env, example)
+        self.assertEqualOperator(ty, Integer)
+
     def test_generalization(self):
         var1 = TypeVariable()
         my_env = {"true": Bool,
