@@ -363,7 +363,11 @@ def analyse(node, env=None):
             # parameter may not be used inside function
             x_type = assum[node.v]
             del assum[node.v]
-            cons.add(TypeConstraint(x_type, arg_type, ConsType.ConsEq))
+            if isinstance(x_type, list):
+                for x_tp in x_type:
+                    cons.add(TypeConstraint(x_tp, arg_type, ConsType.ConsEq))
+            else:
+                cons.add(TypeConstraint(x_type, arg_type, ConsType.ConsEq))
         log_content("Node Lambda, arg name {}:{}".format(node.v, arg_type))
         return Function(arg_type, result_type), assum, cons
     elif isinstance(node, Let):
@@ -380,15 +384,18 @@ def analyse(node, env=None):
             cons.add(TypeConstraint(x_type, defn_type, ConsType.ConsLess, node.m_set))
         return body_type, assum, cons
     elif isinstance(node, Letrec):
-        new_type = TypeVariable()
-        new_env = env.copy()
-        new_env[node.v] = new_type
-        new_non_generic = non_generic.copy()
-        new_non_generic.add(new_type)
-        defn_type = analyse(node.defn, new_env, new_non_generic)
-        # unify(new_type, defn_type)
-        constraint.append(TypeConstraint(new_type, defn_type, ConsType.ConsEq))
-        return analyse(node.body, new_env, non_generic), assum, cons
+        defn_type, assum, cons1 = analyse(node.defn, env)
+        body_type, assum2, cons2 = analyse(node.body, env)
+        x_type = assum2[node.v]
+        cons = cons1.union(cons2)
+        assum = merge_assum(assum, assum2)  # update assum
+        del assum[node.v]
+        if isinstance(x_type, list):
+            for x_tp in x_type:
+                cons.add(TypeConstraint(x_tp, defn_type, ConsType.ConsLess, node.m_set))
+        else:
+            cons.add(TypeConstraint(x_type, defn_type, ConsType.ConsLess, node.m_set))
+        return body_type, assum, cons
     assert 0, "Unhandled syntax node {0}".format(type(node))
 
 
@@ -466,7 +473,7 @@ def unify(x, y):
             raise InferenceError("Wrong number of arguments")
         # s1 = solve(zip([x.types[0]], [y.types[0]]))
         new_cons = [TypeConstraint(x.types[0], y.types[0], ConsType.ConsEq)]
-        # log_content("\nNew cons: {}".format(str(new_cons[0])))
+        log_content("New cons: {}".format(str(new_cons[0])))
         s1 = solve_cons(new_cons)
         s2 = unify(apply(s1, x.types[1]), apply(s1, y.types[1]))
         # log_content("s2: {}".format(str(s2)))
@@ -595,7 +602,7 @@ def infer_exp(env, node):
         for item in assum:
             if item not in env:
                 raise InferenceError("Undefined variables exist: {}".format(item))
-            cons.add(TypeConstraint(env[assum], env[item], ConsType.ConsEq))
+            cons.add(TypeConstraint(assum[item], env[item], ConsType.ConsEq))
         for con in cons:
             log_content(con)
         mgu = solve_cons(cons)
@@ -645,22 +652,22 @@ def main():
 
     examples = [
         # factorial
-        # Letrec("factorial",  # letrec factorial =
-        #        Lambda("n",  # fn n =>
-        #               Apply(
-        #                   Apply(  # cond (zero n) 1
-        #                       Apply(Identifier("cond"),  # cond (zero n)
-        #                             Apply(Identifier("zero"), Identifier("n"))),
-        #                       Identifier("1")),
-        #                   Apply(  # times n
-        #                       Apply(Identifier("times"), Identifier("n")),
-        #                       Apply(Identifier("factorial"),
-        #                             Apply(Identifier("pred"), Identifier("n")))
-        #                   )
-        #               )
-        #               ),  # in
-        #        Apply(Identifier("factorial"), Identifier("5"))
-        #        ),
+        Letrec("factorial",  # letrec factorial =
+               Lambda("n",  # fn n =>
+                      Apply(
+                          Apply(  # cond (zero n) 1
+                              Apply(Identifier("cond"),  # cond (zero n)
+                                    Apply(Identifier("zero"), Identifier("n"))),
+                              Identifier("1")),
+                          Apply(  # times n
+                              Apply(Identifier("times"), Identifier("n")),
+                              Apply(Identifier("factorial"),
+                                    Apply(Identifier("pred"), Identifier("n")))
+                          )
+                      )
+                      ),  # in
+               Apply(Identifier("factorial"), Identifier("5"))
+               ),
 
         # Should fail:
         # fn x => (pair(x(3) (x(true)))
@@ -677,8 +684,8 @@ def main():
 
         # let f = (fn x => x) in ((pair (f 4)) (f true))
         # Let("f", Lambda("x", Identifier("x")), pair),
-        Let("f", Lambda("x", Identifier("x")),
-            Apply(Apply(Identifier("merge"), Apply(Identifier("f"), Identifier("3"))), Apply(Identifier("f"), Identifier("true")))),
+        # Let("f", Lambda("x", Identifier("x")),
+        #     Apply(Apply(Identifier("merge"), Apply(Identifier("f"), Identifier("3"))), Apply(Identifier("f"), Identifier("true")))),
 
         # Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))),
         # Apply(Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))), Apply(Identifier("test_f"), Identifier("true"))),
