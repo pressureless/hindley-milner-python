@@ -35,8 +35,15 @@ class TypeConstraint(object):
 
     def get_active_vars(self):
         if self.ctype == ConsType.ConsLessM:
-            return free_type_variable(self.lhs).union(free_type_variable(self.mid).intersection(free_type_variable(self.rhs)))
-        return free_type_variable(self.lhs).union(free_type_variable(self.rhs))
+            return union_set(free_type_variable(self.lhs), intersect(free_type_variable(self.mid), free_type_variable(self.rhs)))
+        return union_set(free_type_variable(self.lhs), free_type_variable(self.rhs))
+
+    def satisfied(self, remain_cons):
+        u = intersect(difference(free_type_variable(self.rhs), self.mid), get_active_vars(remain_cons))
+        # log_content("ftv:{}, next_con.mid:{}, get_active_vars(remain_cons):{}".format(free_type_variable(self.rhs), self.mid, get_active_vars(remain_cons)))
+        if u is None or len(u) == 0:
+            return True
+        return False
 
 # =======================================================#
 # Class definitions for the abstract syntax tree nodes
@@ -183,10 +190,11 @@ class TypeVariable(object):
 
 
 class TypeScheme(object):
-    def __init__(self, name, quantified_types=[], type_op=None):
+    def __init__(self, name, quantified_types=[], type_op=None, env=None):
         self.name = name
         self.quantified_types = quantified_types
         self.type_op = type_op
+        self.env = env
 
     def instantiate(self):
         new_types = copy.deepcopy(self.type_op.types)
@@ -195,7 +203,7 @@ class TypeScheme(object):
             for ty in self.quantified_types:
                 new_type = TypeVariable()
                 ty_dict[ty.id] = new_type
-                log_content("Instantiate TypeScheme, {} -> {}".format(ty, new_type))
+                log_content("Instantiate TypeScheme, scheme:({}), {} -> {}".format(str(self), ty, new_type))
             for index in range(len(new_types)):
                 if isinstance(new_types[index], TypeOperator):
                     new_types[index].instantiate(ty_dict)
@@ -206,7 +214,10 @@ class TypeScheme(object):
 
     def get_ftvs(self):
         ftvs = self.type_op.get_ftvs()
-        return ftvs.difference(set(self.quantified_types))
+        return difference(ftvs, set(self.quantified_types))
+
+    def empty_quantified(self):
+        return len(self.quantified_types) == 0
 
     def __str__(self):
         quantified_dsp = [str(tp) for tp in self.quantified_types]
@@ -235,13 +246,17 @@ class TypeOperator(object):
         return self.__str__()
 
     def generalize(self, env):
+        new_env = env.copy()
         tyv_set = set()
         ftvs = self.get_ftvs()
         for ty in ftvs:
-            if ty.name not in env:
+            if ty.name not in new_env:
                 tyv_set.add(ty)
         log_content("Generalize ftvs: {}".format(ftvs))
-        type_scheme = TypeScheme(self.name, list(tyv_set), self)
+        log_content("Generalize tyv_set: {}".format(tyv_set))
+        type_scheme = TypeScheme(self.name, list(tyv_set), self, new_env)
+        log_content("Generalize result: {}".format(str(type_scheme)))
+        # print(str(type_scheme))
         return type_scheme
 
     def instantiate(self, ty_dict):
@@ -261,13 +276,17 @@ class TypeOperator(object):
                 self.types = tuple(self.types)
 
     def get_ftvs(self):
-        ftvs = set()
+        ftv_dict = {}
         for ty in self.types:
             if isinstance(ty, TypeVariable):
-                ftvs.add(ty)
+                ftv_dict[ty.name] = ty
+                # ftvs.add(ty)
             elif isinstance(ty, TypeOperator):
                 # type operator
-                ftvs = ftvs.union(ty.get_ftvs())
+                new_dict = gen_env_dict(ty.get_ftvs())
+                ftv_dict.update(new_dict)
+                # ftvs = ftvs.union()
+        ftvs = set(ftv_dict.values())
         return ftvs
 
 
@@ -300,7 +319,7 @@ def instantiate(x):
 def get_active_vars(cons):
     atvs = set()
     for c in cons:
-        atvs.union(c.get_active_vars())
+        atvs = union_set(atvs, c.get_active_vars())
     return atvs
 
 
@@ -438,18 +457,9 @@ def const_type(x):
 def apply(s, t):
     if const_type(t) or isinstance(t, Identifier):
         return t
-    elif isinstance(t, Apply):
-        return Apply(apply(s, t.fn), apply(s, t.arg))
-    elif isinstance(t, Let):
-        return Let(t.v, apply(s, t.defn), apply(s, t.body))
-    elif isinstance(t, Letrec):
-        return Letrec(t.v, apply(s, t.defn), apply(s, t.body))
-    elif isinstance(t, Lambda):
-        return Lambda(t.v, apply(s, t.body))
-    elif isinstance(t, Function):
-        return Function(apply(s, t.types[0]), apply(s, t.types[1]))
     elif isinstance(t, TypeOperator):
         def get_list():
+            new_dict = {}
             res = []
             for ty in t.types:
                 res.append(apply(s, ty))
@@ -459,8 +469,18 @@ def apply(s, t):
         else:
             return TypeOperator(t.name, tuple(get_list()))
     elif isinstance(t, TypeScheme):
-        # todo: apply to typescheme
-        return TypeScheme(t.name, t.quantified_types, apply(s, t.type_op))
+        new_op = apply(s, t.type_op)
+        new_set = apply(s, set(t.env.values()))
+        # # todo: apply to typescheme
+        # q_types = []
+        # for tp in t.quantified_types:
+        #     q_types.append(apply(s, tp))
+        # tp_scheme = TypeScheme(t.name, q_types, apply(s, t.type_op))
+        tp_scheme = generalize(gen_env_dict(new_set), new_op)
+        log_content("Apply t: {}".format(str(t)))
+        log_content("Apply s: {}".format(str(s)))
+        log_content("Apply tp_scheme: {}".format(str(tp_scheme)))
+        return tp_scheme
     elif isinstance(t, TypeVariable):
         return s.get(t.name, t)
     elif isinstance(t, set):
@@ -504,10 +524,7 @@ def unify(x, y):
     elif isinstance(x, TypeOperator) and isinstance(y, TypeOperator):
         if len(x.types) != len(y.types):
             raise InferenceError("Wrong number of arguments")
-        # s1 = solve(zip([x.types[0]], [y.types[0]]))
-        new_cons = [TypeConstraint(x.types[0], y.types[0], ConsType.ConsEq)]
-        log_content("New cons: {}".format(str(new_cons[0])))
-        s1 = solve_cons(new_cons)
+        s1 = unify(x.types[0], y.types[0])
         s2 = unify(apply(s1, x.types[1]), apply(s1, y.types[1]))
         # log_content("s2: {}".format(str(s2)))
         return compose(s2, s1)
@@ -529,6 +546,12 @@ def split_cons(cons):
     else:
         next_le_cons = None
         next_m_cons = None
+        def get_remain_cons(cur_con, cur_cons):
+            res = []
+            for tmp in cur_cons:
+                if tmp != cur_con:
+                    res.append(tmp)
+            return res
         for con in cons:
             if con.ctype == ConsType.ConsEq:
                 cons.remove(con)
@@ -536,7 +559,7 @@ def split_cons(cons):
             elif con.ctype == ConsType.ConsLess:
                 next_le_cons = con if next_le_cons is None else next_le_cons
             else:
-                next_m_cons = con if next_m_cons is None else next_m_cons
+                next_m_cons = con if next_m_cons is None and con.satisfied(get_remain_cons(con, cons)) else next_m_cons
         next_con = next_m_cons if next_m_cons is not None else next_le_cons
         cons.remove(next_con)
         return next_con, cons
@@ -567,21 +590,61 @@ def solve_cons(cons):
         # log_content("next_con: {}".format(next_con))
         if next_con.ctype == ConsType.ConsEq:
             mgu = unify(next_con.lhs, next_con.rhs)
+            # log_content("size:{}, cur mgu: {{".format(len(remain_cons)))
+            # log_dict(mgu)
+            # log_content("}")
             s = compose(solve_cons(applyList(mgu, remain_cons)), mgu)
         elif next_con.ctype == ConsType.ConsLessM:
-            u = free_type_variable(next_con.rhs).difference(next_con.mid).intersection(get_active_vars(remain_cons))
-            if u is None or len(u) == 0:
-                new_cons = TypeConstraint(next_con.lhs, generalize(gen_env_dict(next_con.mid), next_con.rhs), ConsType.ConsLess)
+            if next_con.satisfied(remain_cons):
+                type_scheme = generalize(gen_env_dict(next_con.mid), next_con.rhs)
+                if type_scheme.empty_quantified():
+                    new_cons = TypeConstraint(next_con.lhs, type_scheme.type_op, ConsType.ConsEq)
+                else:
+                    new_cons = TypeConstraint(next_con.lhs, type_scheme, ConsType.ConsLess)
                 log_content("New cons: {}".format(str(new_cons)))
                 remain_cons.add(new_cons)
+                log_cons(remain_cons)  # log
                 s = solve_cons(remain_cons)
+            else:
+                assert False, "Need to check"
         else:
             new_cons = TypeConstraint(next_con.lhs, instantiate(next_con.rhs), ConsType.ConsEq)
             log_content("New cons: {}".format(str(new_cons)))
             remain_cons.add(new_cons)
+            log_cons(remain_cons)  # log
             s = solve_cons(remain_cons)
     # log_content("current substitution: {}".format(s))
     return s
+
+
+def difference(lhs, rhs):
+    lhs_dict = gen_env_dict(lhs)
+    rhs_dict = gen_env_dict(rhs)
+    res = set()
+    for k in set(lhs_dict) - set(rhs_dict):
+        res.add(lhs_dict[k])
+    return res
+
+
+def intersect(lhs, rhs):
+    lhs_dict = gen_env_dict(lhs)
+    rhs_dict = gen_env_dict(rhs)
+    res = set()
+    for k in set(lhs_dict).intersection(set(rhs_dict)):
+        res.add(lhs_dict[k])
+    return res
+
+
+def union_set(lhs, rhs):
+    lhs_dict = gen_env_dict(lhs)
+    rhs_dict = gen_env_dict(rhs)
+    res = set()
+    for k in set(lhs_dict).union(set(rhs_dict)):
+        if k in set(lhs_dict):
+            res.add(lhs_dict[k])
+        else:
+            res.add(rhs_dict[k])
+    return res
 
 
 def bind(n, x):
@@ -630,6 +693,11 @@ def log_dict(dict):
     for e in dict:
         log_content("{}: {}".format(e, dict[e]))
 
+
+def log_cons(cons):
+    log_content("Current cons: {}".format(len(cons)))
+    for con in cons:
+        log_content(con)
 # ==================================================================#
 # Example code to exercise the above
 def infer_exp(env, node):
@@ -647,6 +715,7 @@ def infer_exp(env, node):
             if item not in env:
                 raise InferenceError("Undefined variables exist: {}".format(item))
             cons.add(TypeConstraint(assum[item], env[item], ConsType.ConsEq))
+        log_content("\nCurrent cons: {}".format(len(cons)))
         for con in cons:
             log_content(con)
         mgu = solve_cons(cons)
@@ -682,11 +751,12 @@ def main():
 
     my_env = {"pair": generalize({}, Function(var1, Function(var2, pair_type))),
               "true": Bool,
-              # "f": Function(TypeVariable(), TypeVariable()) ,
+              # "f": Function(TypeVariable(), TypeVariable()),
               "cond": Function(Bool, Function(var3, Function(var3, var3))),
               "zero": Function(Integer, Bool),
               "pred": Function(Integer, Integer),
               "add": Function(Integer, Function(Integer, Integer)),
+              "add_double": Function(Double, Function(Double, Double)),
               "test_f": generalize({}, Function(var4, var4)),
               "merge": Function(Integer, Function(Bool, Bool)),
               "aa": generalize({}, Function(var2, Function(TypeVariable(),  Function(TypeVariable(), TypeVariable())))),
@@ -754,14 +824,25 @@ def main():
 
         # example that demonstrates generic and non-generic variables:
         # fn g => let f = fn x => g in pair (f 3, f true)
-        Lambda("g",
-               Let("f",
-                   Lambda("x", Identifier("g")),
-                   Apply(
-                       Apply(Identifier("pair"),
-                             Apply(Identifier("f"), Identifier("3"))
-                             ),
-                       Apply(Identifier("f"), Identifier("true"))))),
+        # Lambda("g",
+        #        Let("f",
+        #            Lambda("x", Identifier("g")),
+        #            Apply(
+        #                Apply(Identifier("pair"),
+        #                      Apply(Identifier("f"), Identifier("3"))
+        #                      ),
+        #                Apply(Identifier("f"), Identifier("true"))))),
+
+        Let("h",
+            Lambda("g",
+                   Let("f",
+                       Lambda("x", Identifier("g")),
+                       Apply(
+                           Apply(Identifier("pair"),
+                                 Apply(Identifier("f"), Identifier("3"))
+                                 ),
+                           Apply(Identifier("f"), Identifier("true"))))),
+            Apply(Identifier("h"), Identifier("3"))),
 
         # Function composition
         # fn f (fn g (fn arg (f g arg)))
