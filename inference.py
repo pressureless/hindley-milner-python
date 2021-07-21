@@ -201,7 +201,7 @@ class TypeScheme(object):
                     new_types[index].instantiate(ty_dict)
                 else:
                     if new_types[index].id in ty_dict:
-                        new_types[index] = ty_dict[new_types[index].id] 
+                        new_types[index] = ty_dict[new_types[index].id]
         return TypeOperator(self.name, new_types)
 
     def get_ftvs(self):
@@ -375,7 +375,7 @@ def analyse(node, env=None):
         fun_type, assum, cons1 = analyse(node.fn, env)
         arg_type, assum2, cons2 = analyse(node.arg, env)
         result_type = TypeVariable()
-        log_content("Node Apply, result name: {}".format(result_type))
+        log_content("Node Apply, fun_type:{}, result name: {}".format(fun_type.name, result_type))
         cons = cons1.union(cons2)
         assum = merge_assum(assum, assum2)  # update assum
         cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsEq))
@@ -449,10 +449,18 @@ def apply(s, t):
     elif isinstance(t, Function):
         return Function(apply(s, t.types[0]), apply(s, t.types[1]))
     elif isinstance(t, TypeOperator):
-        return Function(apply(s, t.types[0]), apply(s, t.types[1]))
+        def get_list():
+            res = []
+            for ty in t.types:
+                res.append(apply(s, ty))
+            return res
+        if isinstance(t.types, list):
+            return TypeOperator(t.name, get_list())
+        else:
+            return TypeOperator(t.name, tuple(get_list()))
     elif isinstance(t, TypeScheme):
         # todo: apply to typescheme
-        return t
+        return TypeScheme(t.name, t.quantified_types, apply(s, t.type_op))
     elif isinstance(t, TypeVariable):
         return s.get(t.name, t)
     elif isinstance(t, set):
@@ -541,6 +549,13 @@ def generalize(env, x):
         return x
 
 
+def gen_env_dict(m_set):
+    res = {}
+    for m in m_set:
+        res[m.name] = m
+    return res
+
+
 def solve_cons(cons):
     # log_content("solve_cons cons:{}".format(cons))
     # for con in cons:
@@ -556,11 +571,13 @@ def solve_cons(cons):
         elif next_con.ctype == ConsType.ConsLessM:
             u = free_type_variable(next_con.rhs).difference(next_con.mid).intersection(get_active_vars(remain_cons))
             if u is None or len(u) == 0:
-                new_cons = TypeConstraint(next_con.lhs, generalize(next_con.mid, next_con.rhs), ConsType.ConsLess)
+                new_cons = TypeConstraint(next_con.lhs, generalize(gen_env_dict(next_con.mid), next_con.rhs), ConsType.ConsLess)
+                log_content("New cons: {}".format(str(new_cons)))
                 remain_cons.add(new_cons)
                 s = solve_cons(remain_cons)
         else:
             new_cons = TypeConstraint(next_con.lhs, instantiate(next_con.rhs), ConsType.ConsEq)
+            log_content("New cons: {}".format(str(new_cons)))
             remain_cons.add(new_cons)
             s = solve_cons(remain_cons)
     # log_content("current substitution: {}".format(s))
@@ -609,13 +626,16 @@ def is_integer_literal(name):
     return result
 
 
+def log_dict(dict):
+    for e in dict:
+        log_content("{}: {}".format(e, dict[e]))
+
 # ==================================================================#
 # Example code to exercise the above
 def infer_exp(env, node):
     log_perm("node info: {}".format(str(node)))
     log_content("Top env:")
-    for e in env:
-        log_content("{}: {}".format(e, env[e]))
+    log_dict(env)
     log_content("")
     global constraint
     constraint = []
@@ -630,7 +650,9 @@ def infer_exp(env, node):
         for con in cons:
             log_content(con)
         mgu = solve_cons(cons)
-        log_content("mgu: {}\n".format(mgu))
+        log_content("mgu: {")
+        log_dict(mgu)
+        log_content("}")
         infer_ty = apply(mgu, t)
         log_content("Inferred type str: {}".format(str(t)))
         log_perm("Inferred value: {}".format(infer_ty))
@@ -712,7 +734,9 @@ def main():
         #     Apply(Identifier("f"), Identifier("true"))),
 
         # let f = (fn x => x) in ((pair (f 4)) (f true))
-        Let("f", Lambda("x", Identifier("x")), pair),
+        # Let("f", Lambda("x", Identifier("x")), pair),
+
+        # Apply(Apply(Identifier("pair"), Identifier("3")), Identifier("true")),
         # Let("f", Lambda("x", Identifier("x")),
         #     Apply(Apply(Identifier("merge"), Apply(Identifier("f"), Identifier("3"))), Apply(Identifier("f"), Identifier("true")))),
 
@@ -730,14 +754,14 @@ def main():
 
         # example that demonstrates generic and non-generic variables:
         # fn g => let f = fn x => g in pair (f 3, f true)
-        # Lambda("g",
-        #        Let("f",
-        #            Lambda("x", Identifier("g")),
-        #            Apply(
-        #                Apply(Identifier("pair"),
-        #                      Apply(Identifier("f"), Identifier("3"))
-        #                      ),
-        #                Apply(Identifier("f"), Identifier("true"))))),
+        Lambda("g",
+               Let("f",
+                   Lambda("x", Identifier("g")),
+                   Apply(
+                       Apply(Identifier("pair"),
+                             Apply(Identifier("f"), Identifier("3"))
+                             ),
+                       Apply(Identifier("f"), Identifier("true"))))),
 
         # Function composition
         # fn f (fn g (fn arg (f g arg)))
