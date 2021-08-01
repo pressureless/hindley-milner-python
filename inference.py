@@ -17,8 +17,9 @@ from inference_logger import log_content, log_perm
 class ConsType(IntEnum):
     ConsInvalid = -1
     ConsEq = 0
-    ConsLess = 1
-    ConsLessM = 2
+    ConsIn = 1
+    ConsLess = 2
+    ConsLessM = 3
 
 
 class TypeConstraint(object):
@@ -152,6 +153,8 @@ class ParseError(Exception):
     def __str__(self):
         return str(self.message)
 
+class TypeCon(object):
+    pass
 
 # =======================================================#
 # Types and type constructors
@@ -327,6 +330,8 @@ def get_active_vars(cons):
 Integer = TypeOperator("int", [])  # Basic integer
 Double = TypeOperator("double", [])  # Basic double
 Bool = TypeOperator("bool", [])  # Basic bool
+Matrix = TypeOperator("matrix", [])
+Vector = TypeOperator("vector", [])
 
 
 # =======================================================#
@@ -385,6 +390,8 @@ def analyse(node, env=None):
             # v_type = env[node.name]
         elif is_integer_literal(node.name):
             v_type = Integer
+        elif is_double_literal(node.name):
+            v_type = Double
         else:
             v_type = TypeVariable()
             assum[node.name] = v_type
@@ -394,10 +401,13 @@ def analyse(node, env=None):
         fun_type, assum, cons1 = analyse(node.fn, env)
         arg_type, assum2, cons2 = analyse(node.arg, env)
         result_type = TypeVariable()
-        log_content("Node Apply, fun_type:{}, result name: {}".format(fun_type.name, result_type))
+        # log_content("Node Apply, fun_type:{}, result name: {}".format(fun_type.name, result_type))
         cons = cons1.union(cons2)
         assum = merge_assum(assum, assum2)  # update assum
-        cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsEq))
+        if isinstance(fun_type, list):
+            cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsIn))
+        else:
+            cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsEq))
         return result_type, assum, cons
     elif isinstance(node, Lambda):
         arg_type = TypeVariable()
@@ -556,11 +566,27 @@ def split_cons(cons):
             if con.ctype == ConsType.ConsEq:
                 cons.remove(con)
                 return con, cons
+            elif con.ctype == ConsType.ConsIn:
+                find, mgu, new_list = find_proto(con.lhs, con.rhs)
+                if find:
+                    if len(new_list) == 1:
+                        # There may be multiple options, solve the single list first
+                        cons.remove(con)
+                        return con, cons
+                    else:
+                        # decrease the original options
+                        con.rhs = new_list
+                        print("trimed con: {}".format(con))
             elif con.ctype == ConsType.ConsLess:
                 next_le_cons = con if next_le_cons is None else next_le_cons
-            else:
+            elif con.ctype == ConsType.ConsLessM:
                 next_m_cons = con if next_m_cons is None and con.satisfied(get_remain_cons(con, cons)) else next_m_cons
+            else:
+                pass
         next_con = next_m_cons if next_m_cons is not None else next_le_cons
+        if next_con is None:
+            # todo: Handle multiple options
+            print("Error or tips, multiple options for overloaded operators")
         cons.remove(next_con)
         return next_con, cons
 
@@ -577,6 +603,28 @@ def gen_env_dict(m_set):
     for m in m_set:
         res[m.name] = m
     return res
+
+
+def find_proto(source, target_list):
+    """
+    :param source: function with type variables
+    :param target_list: overloaded functions
+    :return:
+    """
+    find = False
+    mgu = empty()
+    new_list = []
+    for target in target_list:
+        try:
+            mgu = unify(source, target)
+            print("cur mgu: {}".format(mgu))
+            if len(mgu) > 0:
+                find = True
+                new_list.append(target)
+        except InferenceError:
+            print("cur mgu: error")
+    print("cur new_list: {}".format(new_list))
+    return find, mgu, new_list
 
 
 def solve_cons(cons):
@@ -607,12 +655,17 @@ def solve_cons(cons):
                 s = solve_cons(remain_cons)
             else:
                 assert False, "Need to check"
-        else:
+        elif next_con.ctype == ConsType.ConsLess:
             new_cons = TypeConstraint(next_con.lhs, instantiate(next_con.rhs), ConsType.ConsEq)
             log_content("New cons: {}".format(str(new_cons)))
             remain_cons.add(new_cons)
             log_cons(remain_cons)  # log
             s = solve_cons(remain_cons)
+        else:
+            log_content("New new : {}".format(str(next_con)))
+            find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
+            if find:
+                s = compose(solve_cons(applyList(mgu, remain_cons)), mgu)
     # log_content("current substitution: {}".format(s))
     return s
 
@@ -688,6 +741,14 @@ def is_integer_literal(name):
         result = False
     return result
 
+def is_double_literal(name):
+    result = True
+    try:
+        float(name)
+    except ValueError:
+        result = False
+    return result
+
 
 def log_dict(dict):
     for e in dict:
@@ -751,11 +812,14 @@ def main():
 
     my_env = {"pair": generalize({}, Function(var1, Function(var2, pair_type))),
               "true": Bool,
-              # "f": Function(TypeVariable(), TypeVariable()),
+              "f": TypeVariable(),
               "cond": Function(Bool, Function(var3, Function(var3, var3))),
               "zero": Function(Integer, Bool),
               "pred": Function(Integer, Integer),
-              "add": Function(Integer, Function(Integer, Integer)),
+              "add": [Function(Integer, Function(Integer, Integer)),
+                      # Function(Integer, Function(Double, Double)),
+                      Function(Double, Function(Integer, Double)),
+                      Function(Double, Function(Double, Double))],
               "add_double": Function(Double, Function(Double, Double)),
               "test_f": generalize({}, Function(var4, var4)),
               "merge": Function(Integer, Function(Bool, Bool)),
@@ -833,16 +897,21 @@ def main():
         #                      ),
         #                Apply(Identifier("f"), Identifier("true"))))),
 
-        Let("h",
-            Lambda("g",
-                   Let("f",
-                       Lambda("x", Identifier("g")),
-                       Apply(
-                           Apply(Identifier("pair"),
-                                 Apply(Identifier("f"), Identifier("3"))
-                                 ),
-                           Apply(Identifier("f"), Identifier("true"))))),
-            Apply(Identifier("h"), Identifier("3"))),
+        # Let("h",
+        #     Lambda("g",
+        #            Let("f",
+        #                Lambda("x", Identifier("g")),
+        #                Apply(
+        #                    Apply(Identifier("pair"),
+        #                          Apply(Identifier("f"), Identifier("3"))
+        #                          ),
+        #                    Apply(Identifier("f"), Identifier("true"))))),
+        #     Apply(Identifier("h"), Identifier("3"))),
+
+        # Lambda("f", Lambda("x", Apply(Identifier("f"), Apply(Identifier("f"), Identifier("x"))))),
+        # Lambda("f", Lambda("x", Apply(Apply(Identifier("add"), Identifier("x")), Identifier("f")))),
+
+        Apply(Apply(Identifier("add"), Identifier("4.2")), Apply(Apply(Identifier("add"), Identifier("f")), Identifier("3.3"))),
 
         # Function composition
         # fn f (fn g (fn arg (f g arg)))
@@ -864,7 +933,9 @@ def main():
     # my_env["x3"] = TypeVariable()
     # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))
     for example in examples:
-        infer_exp(my_env, example)
+        ty, mgu = infer_exp(my_env, example)
+        v_ty = apply(mgu, my_env['f'])
+        print("v_ty: {}".format(v_ty))
 
 
 if __name__ == '__main__':
