@@ -10,6 +10,7 @@
 
 from __future__ import print_function
 from enum import IntEnum
+from enum import Enum, IntEnum, IntFlag
 import copy
 from inference_logger import log_content, log_perm
 
@@ -153,8 +154,74 @@ class ParseError(Exception):
     def __str__(self):
         return str(self.message)
 
+
 class TypeCon(object):
-    pass
+    def __init__(self, name=None):
+        super().__init__()
+        self.name = name
+
+
+class MatrixTypeEnum(IntFlag):
+    Matrix_UNKNOWN = 0
+    Matrix_ROW = 1
+    Matrix_COL = 2
+    Matrix_FIXED = 3
+
+
+class TypeM(TypeCon):
+    def __init__(self, name=None, element_type=None, m_type=MatrixTypeEnum.Matrix_UNKNOWN, rows=None, cols=None):
+        super().__init__(name)
+        self.m_type = m_type
+        self.element_type = element_type
+        self.rows = rows
+        self.cols = cols
+
+    def __repr__(self):
+        return "TypeM"
+
+
+class TypeMDouble(TypeCon):
+    def __init__(self, name=None, element_type=None, m_type=MatrixTypeEnum.Matrix_UNKNOWN, rows=None, cols=None):
+        super().__init__(name)
+        self.m_type = m_type
+        self.element_type = element_type
+        self.rows = rows
+        self.cols = cols
+
+    def __repr__(self):
+        return "TypeM"
+
+
+class TypeMrow(TypeCon):
+    def __init__(self, name=None, element_type=None, rows=None):
+        super().__init__(name)
+        self.element_type = element_type
+        self.rows = rows
+
+    def __repr__(self):
+        return "TypeMrow"
+
+
+class TypeMcol(TypeCon):
+    def __init__(self, name=None, element_type=None, cols=None):
+        super().__init__(name)
+        self.element_type = element_type
+        self.cols = cols
+
+    def __repr__(self):
+        return "TypeMcol"
+
+
+class TypeMfixed(TypeCon):
+    def __init__(self, name=None, element_type=None, rows=None, cols=None):
+        super().__init__(name)
+        self.element_type = element_type
+        self.rows = rows
+        self.cols = cols
+
+    def __repr__(self):
+        return "TypeMfixed"
+
 
 # =======================================================#
 # Types and type constructors
@@ -332,6 +399,11 @@ Double = TypeOperator("double", [])  # Basic double
 Bool = TypeOperator("bool", [])  # Basic bool
 Matrix = TypeOperator("matrix", [])
 Vector = TypeOperator("vector", [])
+Matrix = TypeM()
+MatrixRow = TypeMrow()
+MatrixCol = TypeMcol()
+MatrixFixed = TypeMfixed()
+
 
 
 # =======================================================#
@@ -383,7 +455,9 @@ def analyse(node, env=None):
     """
     assum = {}     # assumptions
     cons = set()   # constraints
-    if isinstance(node, Identifier):
+    if isinstance(node, TypeCon):
+        return node, assum, cons
+    elif isinstance(node, Identifier):
         if node.name in env:
             v_type = instantiate(env[node.name])
             log_content("Node Identifier, existed {}:{}".format(node.name, str(v_type)))
@@ -459,6 +533,8 @@ def empty():
 
 
 def const_type(x):
+    if isinstance(x, TypeCon):
+        return True
     if isinstance(x, TypeOperator) and len(x.types) == 0:
         return True
     return False
@@ -510,8 +586,10 @@ def applyList(s, xs):
     """
     res_list = []
     for cons in xs:
-        if cons.ctype <= ConsType.ConsLess:
+        if cons.ctype == ConsType.ConsLess or cons.ctype == ConsType.ConsEq:
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype))
+        elif cons.ctype == ConsType.ConsIn:
+            res_list.append(TypeConstraint(apply(s, cons.lhs), cons.rhs, cons.ctype))
         else:
             res_list.append(TypeConstraint(apply(s, cons.lhs), apply(s, cons.rhs), cons.ctype, apply(s, cons.mid)))
     # for res in xs:
@@ -527,7 +605,9 @@ def unify(x, y):
         s2 = unify(apply(s1, x.arg), apply(s1, y.arg))
         return compose(s2, s1)
     elif const_type(x) and const_type(y):
-        if x.name == y.name:
+        if isinstance(x, Identifier) and isinstance(y, Identifier) and x.name == y.name:
+            return empty()
+        elif type(x).__name__ == type(y).__name__:
             return empty()
         else:
             raise InferenceError("Type mismatch: {} and {}".format(x, y))
@@ -549,6 +629,11 @@ def unify(x, y):
             "Expected: ", "\t" + str(y)
         ]))
 
+def unify_matrix(x, y):
+    if isinstance(x, TypeMfixed):
+        pass
+    elif isinstance(x, TypeMfixed):
+        pass
 
 def split_cons(cons):
     if len(cons) <= 1:
@@ -816,10 +901,40 @@ def main():
               "cond": Function(Bool, Function(var3, Function(var3, var3))),
               "zero": Function(Integer, Bool),
               "pred": Function(Integer, Integer),
-              "add": [Function(Integer, Function(Integer, Integer)),
+              # "add": [Function(Matrix, Function(Matrix, Matrix)),
+              #         Function(Matrix, Function(MatrixRow, MatrixRow)),
+              #         Function(Matrix, Function(MatrixCol, MatrixCol)),
+              #         Function(Matrix, Function(MatrixFixed, MatrixFixed)),
+              #         #
+              #         Function(MatrixRow, Function(Matrix, MatrixRow)),
+              #         Function(MatrixRow, Function(MatrixRow, MatrixRow)),
+              #         Function(MatrixRow, Function(MatrixCol, MatrixFixed)),
+              #         Function(MatrixRow, Function(MatrixFixed, MatrixFixed)),
+              #         #
+              #         Function(MatrixCol, Function(Matrix, MatrixCol)),
+              #         Function(MatrixCol, Function(MatrixRow, MatrixFixed)),
+              #         Function(MatrixCol, Function(MatrixCol, MatrixCol)),
+              #         Function(MatrixCol, Function(MatrixFixed, MatrixFixed)),
+              #         #
+              #         Function(MatrixFixed, Function(Matrix, MatrixFixed)),
+              #         Function(MatrixFixed, Function(MatrixRow, MatrixFixed)),
+              #         Function(MatrixFixed, Function(MatrixCol, MatrixFixed)),
+              #         Function(MatrixFixed, Function(MatrixFixed, MatrixFixed)),],
                       # Function(Integer, Function(Double, Double)),
-                      Function(Double, Function(Integer, Double)),
-                      Function(Double, Function(Double, Double))],
+                      # Function(Double, Function(Integer, Double)),
+                      # Function(Double, Function(Double, Double)),
+                      # Function(Double, Function(Double, Double))],
+              "add": [Function(Matrix, Function(Matrix, Matrix)),
+                      #
+                      Function(MatrixRow, Function(MatrixRow, MatrixRow)),
+                      #
+                      Function(MatrixCol, Function(MatrixCol, MatrixCol)),
+                      #
+                      Function(MatrixFixed, Function(MatrixFixed, MatrixFixed)),],
+                      # Function(Integer, Function(Double, Double)),
+                      # Function(Double, Function(Integer, Double)),
+                      # Function(Double, Function(Double, Double)),
+                      # Function(Double, Function(Double, Double))],
               "add_double": Function(Double, Function(Double, Double)),
               "test_f": generalize({}, Function(var4, var4)),
               "merge": Function(Integer, Function(Bool, Bool)),
@@ -911,7 +1026,7 @@ def main():
         # Lambda("f", Lambda("x", Apply(Identifier("f"), Apply(Identifier("f"), Identifier("x"))))),
         # Lambda("f", Lambda("x", Apply(Apply(Identifier("add"), Identifier("x")), Identifier("f")))),
 
-        Apply(Apply(Identifier("add"), Identifier("4.2")), Apply(Apply(Identifier("add"), Identifier("f")), Identifier("3.3"))),
+        Apply(Apply(Identifier("add"), MatrixFixed), Apply(Apply(Identifier("add"), Identifier("f")), MatrixFixed)),
 
         # Function composition
         # fn f (fn g (fn arg (f g arg)))
