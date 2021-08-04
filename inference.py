@@ -23,6 +23,8 @@ class ConsType(IntEnum):
     ConsLessM = 3
 
 
+add_fun_list = []
+
 class TypeConstraint(object):
     def __init__(self, lhs=None, rhs=None, ctype=ConsType.ConsInvalid, mid=None):
         self.lhs = lhs
@@ -171,37 +173,40 @@ class TypeM(TypeCon):
         return "TypeM"
 
 
-class TypeMDouble(TypeCon):
+class TypeMDouble(TypeM):
+    # def __init__(self, name=None, rows=None, cols=None):
+    #     super().__init__(name=name, rows=rows, cols=cols)
+
     def __repr__(self):
         return "TypeMDouble"
 
 
-class TypeMrow(TypeCon):
+class TypeMrow(TypeM):
     def __repr__(self):
         return "TypeMrow"
 
 
-class TypeMrowDouble(TypeCon):
+class TypeMrowDouble(TypeM):
     def __repr__(self):
         return "TypeMrowDouble"
 
 
-class TypeMcol(TypeCon):
+class TypeMcol(TypeM):
     def __repr__(self):
         return "TypeMcol"
 
 
-class TypeMcolDouble(TypeCon):
+class TypeMcolDouble(TypeM):
     def __repr__(self):
         return "TypeMcolDouble"
 
 
-class TypeMfixed(TypeCon):
+class TypeMfixed(TypeM):
     def __repr__(self):
         return "TypeMfixed"
 
 
-class TypeMfixedDouble(TypeCon):
+class TypeMfixedDouble(TypeM):
     def __repr__(self):
         return "TypeMfixedDouble"
 
@@ -345,8 +350,8 @@ class TypeOperator(object):
 
 class Function(TypeOperator):
     """A binary type constructor which builds function types"""
-    def __init__(self, from_type, to_type):
-        super(Function, self).__init__("->", [from_type, to_type])
+    def __init__(self, from_type, to_type, name="->"):
+        super(Function, self).__init__(name, [from_type, to_type])
 
 
 def free_type_variable(x):
@@ -465,10 +470,14 @@ def analyse(node, env=None):
         # log_content("Node Apply, fun_type:{}, result name: {}".format(fun_type.name, result_type))
         cons = cons1.union(cons2)
         assum = merge_assum(assum, assum2)  # update assum
+        var_fun = Function(arg_type, result_type)
+        if isinstance(node.fn, Identifier) and node.fn.name == 'add':
+            global add_fun_list
+            add_fun_list.append(var_fun)
         if isinstance(fun_type, list):
-            cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsIn))
+            cons.add(TypeConstraint(var_fun, fun_type, ConsType.ConsIn))
         else:
-            cons.add(TypeConstraint(Function(arg_type, result_type), fun_type, ConsType.ConsEq))
+            cons.add(TypeConstraint(var_fun, fun_type, ConsType.ConsEq))
         return result_type, assum, cons
     elif isinstance(node, Lambda):
         arg_type = TypeVariable()
@@ -595,6 +604,31 @@ def unify(x, y):
         if isinstance(x, Identifier) and isinstance(y, Identifier) and x.name == y.name:
             return empty()
         elif type(x).__name__ == type(y).__name__:
+            print("x:{}, y:{}".format(x, y))
+            if isinstance(x, TypeM) and isinstance(y, TypeM):
+                print("x.rows:{}, x.cols:{}, y.rows:{}, y.cols:{}".format(x.rows, x.cols, y.rows, y.cols))
+                # rows
+                if x.rows is None:
+                    if y.rows is None:
+                        pass
+                    else:
+                        x.rows = y.rows
+                else:
+                    if y.rows is None:
+                        y.rows = x.rows
+                    else:
+                        assert x.rows == y.rows
+                # cols
+                if x.cols is None:
+                    if y.cols is None:
+                        pass
+                    else:
+                        x.cols = y.cols
+                else:
+                    if y.cols is None:
+                        y.cols = x.cols
+                    else:
+                        assert x.cols == y.cols
             return empty()
         else:
             raise InferenceError("Type mismatch: {} and {}".format(x, y))
@@ -965,7 +999,8 @@ def main():
                       Function(Double, Function(Integer, Double)),
                       Function(Double, Function(Double, Double)),
                       Function(Double, Function(Double, Double))],
-              "add_double": Function(Double, Function(Double, Double)),
+              "index": [Function(Matrix, Function(Integer, Integer)),
+                        Function(MatrixDouble, Function(Integer, Double))],
               "test_f": generalize({}, Function(var4, var4)),
               "merge": Function(Integer, Function(Bool, Bool)),
               "aa": generalize({}, Function(var2, Function(TypeVariable(),  Function(TypeVariable(), TypeVariable())))),
@@ -1056,7 +1091,7 @@ def main():
         # Lambda("f", Lambda("x", Apply(Identifier("f"), Apply(Identifier("f"), Identifier("x"))))),
         # Lambda("f", Lambda("x", Apply(Apply(Identifier("add"), Identifier("x")), Identifier("f")))),
 
-        Apply(Apply(Identifier("add"), MatrixFixed), Apply(Apply(Identifier("add"), MatrixFixedDouble), MatrixFixed)),
+        Apply(Apply(Identifier("add"), TypeMDouble()), Apply(Apply(Identifier("add"), TypeMcol(cols=3)), TypeMfixed(rows=22, cols=3))),
         # Apply(Apply(Identifier("add"), MatrixFixedDouble), MatrixFixed),
 
         # Function composition
@@ -1079,9 +1114,67 @@ def main():
     # my_env["x3"] = TypeVariable()
     # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))
     for example in examples:
+        global add_fun_list
+        add_fun_list.clear()
         ty, mgu = infer_exp(my_env, example)
         v_ty = apply(mgu, my_env['f'])
         print("v_ty: {}".format(v_ty))
+        print("add_fun_list: {}".format(add_fun_list))
+        def get_param(var_type):
+            if isinstance(var_type, TypeVariable):
+                var_param = mgu[var_type.name]
+            else:
+                var_param = var_type
+            return var_param
+        for var_fun in add_fun_list:
+            first_param = get_param(var_fun.types[0])
+            if isinstance(first_param, TypeM):
+                # matrix addition
+                remain_func = get_param(var_fun.types[1])
+                sec_param = get_param(remain_func.types[0])
+                ret_param = get_param(remain_func.types[1])
+                print("first_param:{}, first rows:{}, cols:{};"
+                      "sec_param:{}, rows:{}, cols:{};"
+                      "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
+                                                               sec_param, sec_param.rows, sec_param.cols,
+                                                               ret_param, ret_param.rows, ret_param.cols))
+                # rows
+                if first_param.rows is not None:
+                    if sec_param.rows is not None:
+                        assert first_param.rows == sec_param.rows
+                    else:
+                        sec_param.rows = first_param.rows
+                    ret_param.rows = first_param.rows
+                else:
+                    if sec_param.rows is not None:
+                        first_param.rows = sec_param.rows
+                        ret_param.rows = sec_param.rows
+                # cols
+                if first_param.cols is not None:
+                    if sec_param.cols is not None:
+                        assert first_param.cols == sec_param.cols
+                    else:
+                        sec_param.cols = first_param.cols
+                    ret_param.cols = first_param.cols
+                else:
+                    if sec_param.cols is not None:
+                        first_param.cols = sec_param.cols
+                        ret_param.cols = sec_param.cols
+                print("first_param:{}, first rows:{}, cols:{};"
+                      "sec_param:{}, rows:{}, cols:{};"
+                      "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
+                                                               sec_param, sec_param.rows, sec_param.cols,
+                                                               ret_param, ret_param.rows, ret_param.cols))
+
+        print("ty:{}, ty.rows:{}, cols:{}".format(ty, ty.rows, ty.cols))
+
+
+
+
+
+
+
+
 
 
 if __name__ == '__main__':
