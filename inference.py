@@ -609,7 +609,7 @@ def unify(x, y):
         if isinstance(x, Identifier) and isinstance(y, Identifier) and x.name == y.name:
             return empty()
         elif type(x).__name__ == type(y).__name__:
-            print("x:{}, y:{}".format(x, y))
+            # print("x:{}, y:{}".format(x, y))
             return empty()
         else:
             raise InferenceError("Type mismatch: {} and {}".format(x, y))
@@ -663,7 +663,7 @@ def split_cons(cons):
                     else:
                         # decrease the original options
                         con.rhs = new_list
-                        print("trimed con: {}".format(con))
+                        print("split_cons, trimed con: {}".format(con))
             elif con.ctype == ConsType.ConsLess:
                 next_le_cons = con if next_le_cons is None else next_le_cons
             elif con.ctype == ConsType.ConsLessM:
@@ -704,14 +704,14 @@ def find_proto(source, target_list):
     for target in target_list:
         try:
             mgu = unify(source, target)
-            print("cur mgu: {}".format(mgu))
+            print("find_proto, cur mgu: {}".format(mgu))
             if len(mgu) > 0:
                 find = True
                 new_list.append(target)
         except InferenceError:
             pass
             # print("cur mgu: error")
-    print("cur new_list: {}".format(new_list))
+    print("find_proto, cur new_list: {}".format(new_list))
     return find, mgu, new_list
 
 
@@ -755,6 +755,9 @@ def solve_cons(cons):
             log_content("New new : {}".format(str(next_con)))
             find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
             if find:
+                log_content("size:{}, cur mgu: {{".format(len(remain_cons)))
+                log_dict(mgu)
+                log_content("}")
                 mgu_list.append(mgu)
                 s = compose(solve_cons(applyList(mgu, remain_cons)), mgu)
     # log_content("current substitution: {}".format(s))
@@ -883,7 +886,7 @@ def infer_exp(env, node):
         infer_ty = apply(mgu, t)
         log_content("Inferred type str: {}".format(str(t)))
         log_perm("Inferred value: {}".format(infer_ty))
-        return infer_ty, mgu
+        return infer_ty, mgu, t
     except (ParseError, InferenceError) as e:
         log_content(e)
 
@@ -1158,15 +1161,23 @@ def main():
     # for e in my_env:
     #     log_content("{}: {}".format(e, my_env[e]))
     # log_content("")
-
+    def resolved_matrix(m_value):
+        is_resolved = True
+        if isinstance(m_value, TypeMrowDouble) or isinstance(m_value, TypeMrow):
+            is_resolved = m_value.rows is not None
+        elif isinstance(m_value, TypeMcolDouble) or isinstance(m_value, TypeMcol):
+            is_resolved = m_value.cols is not None
+        elif isinstance(m_value, TypeMfixedDouble) or isinstance(m_value, TypeMfixed):
+            is_resolved = m_value.cols is not None and m_value.rows is not None
+        return is_resolved
 
 
     # my_env["x3"] = TypeVariable()
     # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))
     for example in examples:
-        ty, mgu = infer_exp(my_env, example)
-        v_ty = apply(mgu, my_env['f'])
-        print("v_ty: {}".format(v_ty))
+        ty, mgu, t = infer_exp(my_env, example)
+        # v_ty = apply(mgu, my_env['f'])
+        # print("v_ty: {}".format(v_ty))
         print("add_fun_list: {}".format(add_fun_list))
         print("mul_fun_list: {}".format(mul_fun_list))
         def get_param(cur_mgu, var_type):
@@ -1175,102 +1186,139 @@ def main():
             else:
                 var_param = var_type
             return var_param
-        for var_fun in add_fun_list:
-            first_param = get_param(mgu, var_fun.types[0])
-            if isinstance(first_param, TypeM):
-                # matrix addition
-                remain_func = get_param(mgu, var_fun.types[1])
-                sec_param = get_param(mgu, remain_func.types[0])
-                ret_param = get_param(mgu, remain_func.types[1])
-                print("first_param:{}, first rows:{}, cols:{};"
-                      "sec_param:{}, rows:{}, cols:{};"
-                      "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
-                                                               sec_param, sec_param.rows, sec_param.cols,
-                                                               ret_param, ret_param.rows, ret_param.cols))
-                # rows
-                if first_param.rows is not None:
-                    if sec_param.rows is not None:
-                        assert first_param.rows == sec_param.rows
-                    else:
-                        sec_param.rows = first_param.rows
-                    ret_param.rows = first_param.rows
-                else:
-                    if sec_param.rows is not None:
-                        first_param.rows = sec_param.rows
-                        ret_param.rows = sec_param.rows
-                # cols
-                if first_param.cols is not None:
-                    if sec_param.cols is not None:
-                        assert first_param.cols == sec_param.cols
-                    else:
-                        sec_param.cols = first_param.cols
-                    ret_param.cols = first_param.cols
-                else:
-                    if sec_param.cols is not None:
-                        first_param.cols = sec_param.cols
-                        ret_param.cols = sec_param.cols
-                print("first_param:{}, first rows:{}, cols:{};"
-                      "sec_param:{}, rows:{}, cols:{};"
-                      "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
-                                                               sec_param, sec_param.rows, sec_param.cols,
-                                                               ret_param, ret_param.rows, ret_param.cols))
-
-        # print("ty:{}, ty.rows:{}, cols:{}".format(ty, ty.rows, ty.cols))
-        # print("v_ty:{}, v_ty.rows:{}, v_ty:{}".format(v_ty, v_ty.rows, v_ty.cols))
-
+        # Re-process the mgu, create new instances and find the dependency
         print("Before mul, mgu_list:{}".format(mgu_list))
         new_gmu = {}
         for cur_index in range(len(mgu_list)):
             cur_mgu = mgu_list[len(mgu_list) - 1 - cur_index]
             for key, value in cur_mgu.items():
                 if isinstance(value, TypeM):
+                    # if value.rows is not None or value.cols is not None:
+                    #     new_gmu[key] = value
+                    # else:
+                    #     new_gmu[key] = copy.deepcopy(value)
                     new_gmu[key] = copy.deepcopy(value)
-                    print("cur_index:{}, value:{}, addr:{}".format(cur_index, new_gmu[key], id(new_gmu[key])))
+                    print("key:{}, cur_index:{}, value:{}, addr:{}".format(key, cur_index, new_gmu[key],
+                                                                           id(new_gmu[key])))
                 elif isinstance(value, TypeOperator):
                     new_tpo = copy.deepcopy(value)
                     for type_index in range(len(new_tpo.types)):
                         if isinstance(new_tpo.types[type_index], TypeVariable):
                             new_tpo.types[type_index] = new_gmu[new_tpo.types[type_index].name]
-                            print("cur_index:{}, type_index:{}, value:{}, addr:{}".format(cur_index, type_index, new_tpo.types[type_index], id(new_tpo.types[type_index])))
+                            print("key:{}, cur_index:{}, type_index:{}, value:{}, addr:{}".format(key, cur_index,
+                                                                                                  type_index,
+                                                                                                  new_tpo.types[
+                                                                                                      type_index], id(
+                                    new_tpo.types[type_index])))
                     new_gmu[key] = new_tpo
         print("new_gmu:{}".format(new_gmu))
+        ty = new_gmu[t.name]
+        # check dimensions
 
-        # new_gmu = {}
-        # for key, value in mgu.items():
-        #     new_gmu[key] = copy.deepcopy(value)
-        # print("new_gmu:{}".format(new_gmu))
-
-        for var_fun in mul_fun_list:
-            first_param = get_param(new_gmu, var_fun.types[0])
-            if isinstance(first_param, TypeM):
-                # matrix addition
-                remain_func = get_param(new_gmu, var_fun.types[1])
-                sec_param = get_param(new_gmu, remain_func.types[0])
-                ret_param = get_param(new_gmu, remain_func.types[1])
-                print("first_param:{}, first rows:{}, cols:{};"
-                      "sec_param:{}, rows:{}, cols:{};"
-                      "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
-                                                               sec_param, sec_param.rows, sec_param.cols,
-                                                               ret_param, ret_param.rows, ret_param.cols))
-                # rows
-                if first_param.cols is not None:
-                    if sec_param.rows is not None:
-                        assert first_param.cols == sec_param.rows
+        assert_list = []
+        unresolved = True
+        cnt = 0
+        while unresolved:
+            unresolved = False
+            cnt += 1
+            print("cnt: {}".format(cnt))
+            for var_fun in add_fun_list:
+                first_param = get_param(mgu, var_fun.types[0])
+                if isinstance(first_param, TypeM):
+                    # matrix addition
+                    remain_func = get_param(mgu, var_fun.types[1])
+                    sec_param = get_param(mgu, remain_func.types[0])
+                    ret_param = get_param(mgu, remain_func.types[1])
+                    print("first_param:{}, first rows:{}, cols:{};"
+                          "sec_param:{}, rows:{}, cols:{};"
+                          "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
+                                                                   sec_param, sec_param.rows, sec_param.cols,
+                                                                   ret_param, ret_param.rows, ret_param.cols))
+                    # rows
+                    if first_param.rows is not None:
+                        if sec_param.rows is not None:
+                            assert first_param.rows == sec_param.rows
+                            assert_list.append(first_param.rows, sec_param.rows)
+                        else:
+                            sec_param.rows = first_param.rows
+                        ret_param.rows = first_param.rows
                     else:
-                        sec_param.rows = first_param.cols
-                else:
-                    if sec_param.rows is not None:
-                        first_param.cols = sec_param.rows
-                ret_param.rows = first_param.rows
-                ret_param.cols = sec_param.cols
-                print("first_param:{}, first rows:{}, cols:{};"
-                      "sec_param:{}, rows:{}, cols:{};"
-                      "ret_param:{}, rows:{}, cols:{}; "
-                      "first addr:{}, sec addr:{}, ret addr:{}".format(first_param, first_param.rows, first_param.cols,
-                                                               sec_param, sec_param.rows, sec_param.cols,
-                                                               ret_param, ret_param.rows, ret_param.cols,
-                                                                       id(first_param), id(sec_param), id(ret_param)))
+                        if sec_param.rows is not None:
+                            first_param.rows = sec_param.rows
+                            ret_param.rows = sec_param.rows
+                    # cols
+                    if first_param.cols is not None:
+                        if sec_param.cols is not None:
+                            assert first_param.cols == sec_param.cols
+                            assert_list.append(first_param.cols, sec_param.cols)
+                        else:
+                            sec_param.cols = first_param.cols
+                        ret_param.cols = first_param.cols
+                    else:
+                        if sec_param.cols is not None:
+                            first_param.cols = sec_param.cols
+                            ret_param.cols = sec_param.cols
+                    resolved = resolved_matrix(ret_param)
+                    if not resolved:
+                        unresolved = True
+                    print("first_param:{}, first rows:{}, cols:{};"
+                          "sec_param:{}, rows:{}, cols:{};"
+                          "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
+                                                                   sec_param, sec_param.rows, sec_param.cols,
+                                                                   ret_param, ret_param.rows, ret_param.cols))
+
+            # print("ty:{}, ty.rows:{}, cols:{}".format(ty, ty.rows, ty.cols))
+            # print("v_ty:{}, v_ty.rows:{}, v_ty:{}".format(v_ty, v_ty.rows, v_ty.cols))
+
+
+
+            # new_gmu = {}
+            # for key, value in mgu.items():
+            #     new_gmu[key] = copy.deepcopy(value)
+            # print("new_gmu:{}".format(new_gmu))
+
+            # def check_mul_list():
+            for mul_index in range(len(mul_fun_list)):
+                var_fun = mul_fun_list[mul_index]
+                first_param = get_param(new_gmu, var_fun.types[0])
+                if isinstance(first_param, TypeM):
+                    # matrix addition
+                    remain_func = get_param(new_gmu, var_fun.types[1])
+                    sec_param = get_param(new_gmu, remain_func.types[0])
+                    ret_param = get_param(new_gmu, remain_func.types[1])
+                    # print("first_param:{}, first rows:{}, cols:{};"
+                    #       "sec_param:{}, rows:{}, cols:{};"
+                    #       "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
+                    #                                                sec_param, sec_param.rows, sec_param.cols,
+                    #                                                ret_param, ret_param.rows, ret_param.cols))
+                    # rows
+                    if first_param.cols is not None:
+                        if sec_param.rows is not None:
+                            assert first_param.cols == sec_param.rows
+                        else:
+                            sec_param.rows = first_param.cols
+                    else:
+                        if sec_param.rows is not None:
+                            first_param.cols = sec_param.rows
+                    ret_param.rows = first_param.rows if ret_param.rows is None else ret_param.rows
+                    ret_param.cols = sec_param.cols if ret_param.cols is None else ret_param.cols
+                    print("mul_index:{};\n"
+                          "fir param:{}, rows:{}, cols:{}, addr:{};\n"
+                          "sec param:{}, rows:{}, cols:{}, addr:{};\n"
+                          "ret param:{}, rows:{}, cols:{}, addr:{};\n".format(mul_index,
+                                                                           first_param, first_param.rows, first_param.cols, id(first_param),
+                                                                           sec_param, sec_param.rows, sec_param.cols, id(sec_param),
+                                                                           ret_param, ret_param.rows, ret_param.cols, id(ret_param)))
+                resolved = resolved_matrix(ret_param)
+                if not resolved:
+                    unresolved = True
             print("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
+            if cnt > 5:
+                unresolved = False
+
+            # check_mul_list()
+
+
 
 
 
