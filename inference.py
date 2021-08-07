@@ -315,7 +315,7 @@ class TypeOperator(object):
         log_content("Generalize tyv_set: {}".format(tyv_set))
         type_scheme = TypeScheme(self.name, list(tyv_set), self, new_env)
         log_content("Generalize result: {}".format(str(type_scheme)))
-        # print(str(type_scheme))
+        # log_content(str(type_scheme))
         return type_scheme
 
     def instantiate(self, ty_dict):
@@ -609,7 +609,7 @@ def unify(x, y):
         if isinstance(x, Identifier) and isinstance(y, Identifier) and x.name == y.name:
             return empty()
         elif type(x).__name__ == type(y).__name__:
-            # print("x:{}, y:{}".format(x, y))
+            # log_content("x:{}, y:{}".format(x, y))
             return empty()
         else:
             raise InferenceError("Type mismatch: {} and {}".format(x, y))
@@ -649,11 +649,14 @@ def split_cons(cons):
                 if tmp != cur_con:
                     res.append(tmp)
             return res
+        # Always solve first type
         for con in cons:
             if con.ctype == ConsType.ConsEq:
                 cons.remove(con)
                 return con, cons
-            elif con.ctype == ConsType.ConsIn:
+        # Other cons handled together
+        for con in cons:
+            if con.ctype == ConsType.ConsIn:
                 find, mgu, new_list = find_proto(con.lhs, con.rhs)
                 if find:
                     if len(new_list) == 1:
@@ -663,7 +666,7 @@ def split_cons(cons):
                     else:
                         # decrease the original options
                         con.rhs = new_list
-                        print("split_cons, trimed con: {}".format(con))
+                        log_content("split_cons, trimed con: {}".format(con))
             elif con.ctype == ConsType.ConsLess:
                 next_le_cons = con if next_le_cons is None else next_le_cons
             elif con.ctype == ConsType.ConsLessM:
@@ -673,7 +676,7 @@ def split_cons(cons):
         next_con = next_m_cons if next_m_cons is not None else next_le_cons
         if next_con is None:
             # todo: Handle multiple options
-            print("Error or tips, multiple options for overloaded operators")
+            log_content("Error or tips, multiple options for overloaded operators")
         cons.remove(next_con)
         return next_con, cons
 
@@ -704,14 +707,14 @@ def find_proto(source, target_list):
     for target in target_list:
         try:
             mgu = unify(source, target)
-            print("find_proto, cur mgu: {}".format(mgu))
+            log_content("find_proto, cur mgu: {}".format(mgu))
             if len(mgu) > 0:
                 find = True
                 new_list.append(target)
         except InferenceError:
             pass
-            # print("cur mgu: error")
-    print("find_proto, cur new_list: {}".format(new_list))
+            # log_content("cur mgu: error")
+    log_content("find_proto, cur new_list: {}".format(new_list))
     return find, mgu, new_list
 
 
@@ -1143,7 +1146,7 @@ def main():
         # Apply(Apply(Identifier("add"), TypeMcol(cols=3)),
         #       Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3))),
 
-        Apply(Apply(Identifier("mul"), TypeMcol(cols=5)), Apply(Apply(Identifier("mul"), TypeMfixed(rows=5, cols=3)), TypeMfixed(rows=3, cols=2))),
+        Apply(Apply(Identifier("mul"), TypeMcol(cols=5)), Apply(Apply(Identifier("mul"), TypeMfixed(rows=5, cols=31)), TypeMfixed(rows=31, cols=12))),
         # Apply(Apply(Identifier("index"), Apply(Apply(Identifier("add"), TypeMcol(cols=3)), Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3)))), Identifier("4")),
         # Apply(Apply(Identifier("add"), MatrixFixedDouble), MatrixFixed),
 
@@ -1177,9 +1180,9 @@ def main():
     for example in examples:
         ty, mgu, t = infer_exp(my_env, example)
         # v_ty = apply(mgu, my_env['f'])
-        # print("v_ty: {}".format(v_ty))
-        print("add_fun_list: {}".format(add_fun_list))
-        print("mul_fun_list: {}".format(mul_fun_list))
+        # log_content("v_ty: {}".format(v_ty))
+        log_content("add_fun_list: {}".format(add_fun_list))
+        log_content("mul_fun_list: {}".format(mul_fun_list))
         def get_param(cur_mgu, var_type):
             if isinstance(var_type, TypeVariable):
                 var_param = cur_mgu[var_type.name]
@@ -1187,7 +1190,7 @@ def main():
                 var_param = var_type
             return var_param
         # Re-process the mgu, create new instances and find the dependency
-        print("Before mul, mgu_list:{}".format(mgu_list))
+        log_content("Before mul, mgu_list:{}".format(mgu_list))
         new_gmu = {}
         for cur_index in range(len(mgu_list)):
             cur_mgu = mgu_list[len(mgu_list) - 1 - cur_index]
@@ -1198,20 +1201,20 @@ def main():
                     # else:
                     #     new_gmu[key] = copy.deepcopy(value)
                     new_gmu[key] = copy.deepcopy(value)
-                    print("key:{}, cur_index:{}, value:{}, addr:{}".format(key, cur_index, new_gmu[key],
+                    log_content("key:{}, cur_index:{}, value:{}, addr:{}".format(key, cur_index, new_gmu[key],
                                                                            id(new_gmu[key])))
                 elif isinstance(value, TypeOperator):
                     new_tpo = copy.deepcopy(value)
                     for type_index in range(len(new_tpo.types)):
                         if isinstance(new_tpo.types[type_index], TypeVariable):
                             new_tpo.types[type_index] = new_gmu[new_tpo.types[type_index].name]
-                            print("key:{}, cur_index:{}, type_index:{}, value:{}, addr:{}".format(key, cur_index,
+                            log_content("key:{}, cur_index:{}, type_index:{}, value:{}, addr:{}".format(key, cur_index,
                                                                                                   type_index,
                                                                                                   new_tpo.types[
                                                                                                       type_index], id(
                                     new_tpo.types[type_index])))
                     new_gmu[key] = new_tpo
-        print("new_gmu:{}".format(new_gmu))
+        log_content("new_gmu:{}".format(new_gmu))
         ty = new_gmu[t.name]
         # check dimensions
 
@@ -1221,7 +1224,7 @@ def main():
         while unresolved:
             unresolved = False
             cnt += 1
-            print("cnt: {}".format(cnt))
+            log_content("cnt: {}".format(cnt))
             for var_fun in add_fun_list:
                 first_param = get_param(mgu, var_fun.types[0])
                 if isinstance(first_param, TypeM):
@@ -1229,7 +1232,7 @@ def main():
                     remain_func = get_param(mgu, var_fun.types[1])
                     sec_param = get_param(mgu, remain_func.types[0])
                     ret_param = get_param(mgu, remain_func.types[1])
-                    print("first_param:{}, first rows:{}, cols:{};"
+                    log_content("first_param:{}, first rows:{}, cols:{};"
                           "sec_param:{}, rows:{}, cols:{};"
                           "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
                                                                    sec_param, sec_param.rows, sec_param.cols,
@@ -1261,21 +1264,21 @@ def main():
                     resolved = resolved_matrix(ret_param)
                     if not resolved:
                         unresolved = True
-                    print("first_param:{}, first rows:{}, cols:{};"
+                    log_content("first_param:{}, first rows:{}, cols:{};"
                           "sec_param:{}, rows:{}, cols:{};"
                           "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
                                                                    sec_param, sec_param.rows, sec_param.cols,
                                                                    ret_param, ret_param.rows, ret_param.cols))
 
-            # print("ty:{}, ty.rows:{}, cols:{}".format(ty, ty.rows, ty.cols))
-            # print("v_ty:{}, v_ty.rows:{}, v_ty:{}".format(v_ty, v_ty.rows, v_ty.cols))
+            # log_content("ty:{}, ty.rows:{}, cols:{}".format(ty, ty.rows, ty.cols))
+            # log_content("v_ty:{}, v_ty.rows:{}, v_ty:{}".format(v_ty, v_ty.rows, v_ty.cols))
 
 
 
             # new_gmu = {}
             # for key, value in mgu.items():
             #     new_gmu[key] = copy.deepcopy(value)
-            # print("new_gmu:{}".format(new_gmu))
+            # log_content("new_gmu:{}".format(new_gmu))
 
             # def check_mul_list():
             for mul_index in range(len(mul_fun_list)):
@@ -1286,7 +1289,7 @@ def main():
                     remain_func = get_param(new_gmu, var_fun.types[1])
                     sec_param = get_param(new_gmu, remain_func.types[0])
                     ret_param = get_param(new_gmu, remain_func.types[1])
-                    # print("first_param:{}, first rows:{}, cols:{};"
+                    # log_content("first_param:{}, first rows:{}, cols:{};"
                     #       "sec_param:{}, rows:{}, cols:{};"
                     #       "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
                     #                                                sec_param, sec_param.rows, sec_param.cols,
@@ -1302,7 +1305,7 @@ def main():
                             first_param.cols = sec_param.rows
                     ret_param.rows = first_param.rows if ret_param.rows is None else ret_param.rows
                     ret_param.cols = sec_param.cols if ret_param.cols is None else ret_param.cols
-                    print("mul_index:{};\n"
+                    log_content("mul_index:{};\n"
                           "fir param:{}, rows:{}, cols:{}, addr:{};\n"
                           "sec param:{}, rows:{}, cols:{}, addr:{};\n"
                           "ret param:{}, rows:{}, cols:{}, addr:{};\n".format(mul_index,
@@ -1312,7 +1315,7 @@ def main():
                 resolved = resolved_matrix(ret_param)
                 if not resolved:
                     unresolved = True
-            print("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
+            log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
             if cnt > 5:
                 unresolved = False
 
