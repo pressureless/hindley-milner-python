@@ -13,7 +13,7 @@ from enum import IntEnum
 from enum import Enum, IntEnum, IntFlag
 import copy
 from inference_logger import log_content, log_perm
-
+import math
 
 class ConsType(IntEnum):
     ConsInvalid = -1
@@ -210,6 +210,18 @@ class TypeMfixed(TypeM):
 class TypeMfixedDouble(TypeM):
     def __repr__(self):
         return "TypeMfixedDouble"
+
+
+inherited_dict = {
+    "TypeMDouble": ["TypeM", "TypeMDouble", "TypeMrow", "TypeMrowDouble", "TypeMcol", "TypeMcolDouble", "TypeMfixed", "TypeMfixedDouble"],
+    "TypeM": ["TypeM", "TypeMrow", "TypeMcol", "TypeMfixed"],
+    "TypeMrowDouble": ["TypeMrow", "TypeMrowDouble", "TypeMfixed", "TypeMfixedDouble"],
+    "TypeMrow": ["TypeMrow", "TypeMfixed"],
+    "TypeMcolDouble": ["TypeMcol", "TypeMcolDouble", "TypeMfixed", "TypeMfixedDouble"],
+    "TypeMcol": ["TypeMcol", "TypeMfixed"],
+    "TypeMfixedDouble": ["TypeMfixed", "TypeMfixedDouble"],
+    "TypeMfixed": ["TypeMfixed"],
+}
 
 
 # =======================================================#
@@ -639,7 +651,16 @@ def unify_matrix(x, y):
 
 def split_cons(cons):
     if len(cons) <= 1:
-        return list(cons)[0], set()
+        next_con = list(cons)[0]
+        if next_con.ctype == ConsType.ConsIn:
+            find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
+            if find:
+                if len(new_list) != 1:
+                    # decrease the original options
+                    next_con.rhs = new_list
+                    log_content("split_cons, trimed con: {}".format(next_con))
+                    find_generic_cos(next_con)
+        return next_con, set()
     else:
         next_le_cons = None
         next_m_cons = None
@@ -655,6 +676,8 @@ def split_cons(cons):
                 cons.remove(con)
                 return con, cons
         # Other cons handled together
+        in_cnt = 0
+        in_con = None
         for con in cons:
             if con.ctype == ConsType.ConsIn:
                 find, mgu, new_list = find_proto(con.lhs, con.rhs)
@@ -667,6 +690,8 @@ def split_cons(cons):
                         # decrease the original options
                         con.rhs = new_list
                         log_content("split_cons, trimed con: {}".format(con))
+                        in_cnt += 1
+                        in_con = con
             elif con.ctype == ConsType.ConsLess:
                 next_le_cons = con if next_le_cons is None else next_le_cons
             elif con.ctype == ConsType.ConsLessM:
@@ -677,8 +702,43 @@ def split_cons(cons):
         if next_con is None:
             # todo: Handle multiple options
             log_content("Error or tips, multiple options for overloaded operators")
+            if in_cnt == 1:
+                print("in_cnt: {}".format(in_cnt))
+                find_generic_cos(in_con)
+                next_con = in_con
+                print("trimmmmmmmmm")
+            else:
+                return split_minimum_ty(cons)
         cons.remove(next_con)
         return next_con, cons
+
+
+def split_minimum_ty(cons):
+    next_con = None
+    cur_cnt = math.inf
+    for cur_con in cons:
+        if cur_con.ctype == ConsType.ConsIn:
+            tmp_cnt = get_ty_cnts(cur_con.lhs)
+            if tmp_cnt < cur_cnt:
+                cur_cnt = tmp_cnt
+                next_con = cur_con
+    cons.remove(next_con)
+    return next_con, cons
+
+
+def get_ty_cnts(tpo):
+    """
+    Get the number of TypeVariables
+    :param tpo: TypeOperator, TypeVariable or TypeCons
+    :return:
+    """
+    cnt = 0
+    if isinstance(tpo, TypeOperator):
+        for ty in tpo.types:
+            cnt += get_ty_cnts(ty)
+    elif isinstance(tpo, TypeVariable):
+        cnt = 1
+    return cnt
 
 
 def generalize(env, x):
@@ -716,6 +776,40 @@ def find_proto(source, target_list):
             # log_content("cur mgu: error")
     log_content("find_proto, cur new_list: {}".format(new_list))
     return find, mgu, new_list
+
+
+def find_generic_cos(cons):
+    cur_cons = cons.rhs[0]
+    for cur_index in range(1, len(cons.rhs)):
+        if not is_more_generic_opt(cur_cons, cons.rhs[cur_index]):
+            cur_cons = cons.rhs[cur_index]
+    print("find_generic_cos, cur_cons: {}".format(cur_cons))
+    cons.rhs = cur_cons
+    cons.ctype = ConsType.ConsEq
+
+
+def is_more_generic(lhs, rhs):
+    if isinstance(lhs, TypeOperator) and isinstance(rhs, TypeOperator):
+        return is_more_generic_opt(lhs, rhs)
+    else:
+        return is_more_generic_tp(lhs, rhs)
+
+
+def is_more_generic_opt(lhs_opt, rhs_opt):
+    more_generic = True
+    for cur_index in range(len(lhs_opt.types)):
+        if not is_more_generic(lhs_opt.types[cur_index], rhs_opt.types[cur_index]):
+            more_generic = False
+            break
+    return more_generic
+
+
+def is_more_generic_tp(lhs_tp, rhs_tp):
+    more_generic = False
+    if isinstance(lhs_tp, TypeM) and isinstance(rhs_tp, TypeM):
+        if rhs_tp.__class__.__name__ in inherited_dict[lhs_tp.__class__.__name__]:
+            more_generic = True
+    return more_generic
 
 
 def solve_cons(cons):
@@ -916,6 +1010,8 @@ def main():
     my_env = {"pair": generalize({}, Function(var1, Function(var2, pair_type))),
               "true": Bool,
               "f": TypeVariable(),
+              "g": TypeVariable(),
+              "h": TypeVariable(),
               "cond": Function(Bool, Function(var3, Function(var3, var3))),
               "zero": Function(Integer, Bool),
               "pred": Function(Integer, Integer),
@@ -940,41 +1036,42 @@ def main():
                       Function(MatrixFixedDouble, Function(MatrixFixed, MatrixFixedDouble)),
                       Function(MatrixFixedDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
                       #
-                      Function(Integer, Function(Matrix, Matrix)),
-                      Function(Integer, Function(MatrixDouble, MatrixDouble)),
-                      Function(Integer, Function(MatrixRow, MatrixRow)),
-                      Function(Integer, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(Integer, Function(MatrixCol, MatrixCol)),
-                      Function(Integer, Function(MatrixColDouble, MatrixColDouble)),
-                      Function(Integer, Function(MatrixFixed, MatrixFixed)),
-                      Function(Integer, Function(MatrixFixedDouble, MatrixFixedDouble)),
+                      # Function(Integer, Function(Matrix, Matrix)),
+                      # Function(Integer, Function(MatrixDouble, MatrixDouble)),
+                      # Function(Integer, Function(MatrixRow, MatrixRow)),
+                      # Function(Integer, Function(MatrixRowDouble, MatrixRowDouble)),
+                      # Function(Integer, Function(MatrixCol, MatrixCol)),
+                      # Function(Integer, Function(MatrixColDouble, MatrixColDouble)),
+                      # Function(Integer, Function(MatrixFixed, MatrixFixed)),
+                      # Function(Integer, Function(MatrixFixedDouble, MatrixFixedDouble)),
+                      # #
+                      # Function(Matrix, Function(Integer, Matrix)),
+                      # Function(MatrixDouble, Function(Integer, MatrixDouble)),
+                      # Function(MatrixRow, Function(Integer, MatrixRow)),
+                      # Function(MatrixRowDouble, Function(Integer, MatrixRowDouble)),
+                      # Function(MatrixCol, Function(Integer, MatrixCol)),
+                      # Function(MatrixColDouble, Function(Integer, MatrixColDouble)),
+                      # Function(MatrixFixed, Function(Integer, MatrixFixed)),
+                      # Function(MatrixFixedDouble, Function(Integer, MatrixFixedDouble)),
+                      # #
+                      # Function(Double, Function(Matrix, MatrixDouble)),
+                      # Function(Double, Function(MatrixDouble, MatrixDouble)),
+                      # Function(Double, Function(MatrixRow, MatrixRowDouble)),
+                      # Function(Double, Function(MatrixRowDouble, MatrixRowDouble)),
+                      # Function(Double, Function(MatrixCol, MatrixColDouble)),
+                      # Function(Double, Function(MatrixColDouble, MatrixColDouble)),
+                      # Function(Double, Function(MatrixFixed, MatrixFixedDouble)),
+                      # Function(Double, Function(MatrixFixedDouble, MatrixFixedDouble)),
                       #
-                      Function(Matrix, Function(Integer, Matrix)),
-                      Function(MatrixDouble, Function(Integer, MatrixDouble)),
-                      Function(MatrixRow, Function(Integer, MatrixRow)),
-                      Function(MatrixRowDouble, Function(Integer, MatrixRowDouble)),
-                      Function(MatrixCol, Function(Integer, MatrixCol)),
-                      Function(MatrixColDouble, Function(Integer, MatrixColDouble)),
-                      Function(MatrixFixed, Function(Integer, MatrixFixed)),
-                      Function(MatrixFixedDouble, Function(Integer, MatrixFixedDouble)),
-                      #
-                      Function(Double, Function(Matrix, MatrixDouble)),
-                      Function(Double, Function(MatrixDouble, MatrixDouble)),
-                      Function(Double, Function(MatrixRow, MatrixRowDouble)),
-                      Function(Double, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(Double, Function(MatrixCol, MatrixColDouble)),
-                      Function(Double, Function(MatrixColDouble, MatrixColDouble)),
-                      Function(Double, Function(MatrixFixed, MatrixFixedDouble)),
-                      Function(Double, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(Matrix, Function(Double, MatrixDouble)),
-                      Function(MatrixDouble, Function(Double, MatrixDouble)),
-                      Function(MatrixRow, Function(Double, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(Double, MatrixRowDouble)),
-                      Function(MatrixCol, Function(Double, MatrixColDouble)),
-                      Function(MatrixColDouble, Function(Double, MatrixColDouble)),
-                      Function(MatrixFixed, Function(Double, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(Double, MatrixFixedDouble))],
+                      # Function(Matrix, Function(Double, MatrixDouble)),
+                      # Function(MatrixDouble, Function(Double, MatrixDouble)),
+                      # Function(MatrixRow, Function(Double, MatrixRowDouble)),
+                      # Function(MatrixRowDouble, Function(Double, MatrixRowDouble)),
+                      # Function(MatrixCol, Function(Double, MatrixColDouble)),
+                      # Function(MatrixColDouble, Function(Double, MatrixColDouble)),
+                      # Function(MatrixFixed, Function(Double, MatrixFixedDouble)),
+                      # Function(MatrixFixedDouble, Function(Double, MatrixFixedDouble))
+                   ],
               "add": [Function(Matrix, Function(Matrix, Matrix)),
                       Function(Matrix, Function(MatrixDouble, MatrixDouble)),
                       Function(Matrix, Function(MatrixRow, MatrixRow)),
@@ -1143,10 +1240,23 @@ def main():
         # Lambda("f", Lambda("x", Apply(Identifier("f"), Apply(Identifier("f"), Identifier("x"))))),
         # Lambda("f", Lambda("x", Apply(Apply(Identifier("add"), Identifier("x")), Identifier("f")))),
 
-        # Apply(Apply(Identifier("add"), TypeMcol(cols=3)),
+        # Apply(Apply(Identifier("mul"), TypeMcol(cols=3)),
         #       Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3))),
 
-        Apply(Apply(Identifier("mul"), TypeMcol(cols=5)), Apply(Apply(Identifier("mul"), TypeMfixed(rows=5, cols=31)), TypeMfixed(rows=31, cols=12))),
+        # Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)),
+        #       Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),
+
+        # M(2,3) +
+        # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
+        #       Apply( Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  TypeMfixed(rows=6, cols=3))),
+
+        # M(2,3) + f*M(5,6)*g
+        Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
+              Apply( Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
+
+        # Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3)),
+
+        # Apply(Apply(Identifier("mul"), TypeMcol(cols=5)), Apply(Apply(Identifier("mul"), TypeMfixed(rows=5, cols=31)), TypeMfixed(rows=31, cols=12))),
         # Apply(Apply(Identifier("index"), Apply(Apply(Identifier("add"), TypeMcol(cols=3)), Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3)))), Identifier("4")),
         # Apply(Apply(Identifier("add"), MatrixFixedDouble), MatrixFixed),
 
@@ -1179,8 +1289,6 @@ def main():
     # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))
     for example in examples:
         ty, mgu, t = infer_exp(my_env, example)
-        # v_ty = apply(mgu, my_env['f'])
-        # log_content("v_ty: {}".format(v_ty))
         log_content("add_fun_list: {}".format(add_fun_list))
         log_content("mul_fun_list: {}".format(mul_fun_list))
         def get_param(cur_mgu, var_type):
@@ -1225,23 +1333,19 @@ def main():
             unresolved = False
             cnt += 1
             log_content("cnt: {}".format(cnt))
+            # Handle addition
             for var_fun in add_fun_list:
-                first_param = get_param(mgu, var_fun.types[0])
+                first_param = get_param(new_gmu, var_fun.types[0])
                 if isinstance(first_param, TypeM):
                     # matrix addition
-                    remain_func = get_param(mgu, var_fun.types[1])
-                    sec_param = get_param(mgu, remain_func.types[0])
-                    ret_param = get_param(mgu, remain_func.types[1])
-                    log_content("first_param:{}, first rows:{}, cols:{};"
-                          "sec_param:{}, rows:{}, cols:{};"
-                          "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
-                                                                   sec_param, sec_param.rows, sec_param.cols,
-                                                                   ret_param, ret_param.rows, ret_param.cols))
+                    remain_func = get_param(new_gmu, var_fun.types[1])
+                    sec_param = get_param(new_gmu, remain_func.types[0])
+                    ret_param = get_param(new_gmu, remain_func.types[1])
                     # rows
                     if first_param.rows is not None:
                         if sec_param.rows is not None:
                             assert first_param.rows == sec_param.rows
-                            assert_list.append(first_param.rows, sec_param.rows)
+                            # assert_list.append(first_param.rows, sec_param.rows)
                         else:
                             sec_param.rows = first_param.rows
                         ret_param.rows = first_param.rows
@@ -1249,11 +1353,16 @@ def main():
                         if sec_param.rows is not None:
                             first_param.rows = sec_param.rows
                             ret_param.rows = sec_param.rows
+                        else:
+                            if ret_param.rows is not None:
+                                # Fill back
+                                first_param.rows = ret_param.rows
+                                sec_param.rows = ret_param.rows
                     # cols
                     if first_param.cols is not None:
                         if sec_param.cols is not None:
                             assert first_param.cols == sec_param.cols
-                            assert_list.append(first_param.cols, sec_param.cols)
+                            # assert_list.append(first_param.cols, sec_param.cols)
                         else:
                             sec_param.cols = first_param.cols
                         ret_param.cols = first_param.cols
@@ -1261,25 +1370,22 @@ def main():
                         if sec_param.cols is not None:
                             first_param.cols = sec_param.cols
                             ret_param.cols = sec_param.cols
+                        else:
+                            if ret_param.cols is not None:
+                                # Fill back
+                                first_param.cols = ret_param.cols
+                                sec_param.cols = ret_param.cols
                     resolved = resolved_matrix(ret_param)
                     if not resolved:
                         unresolved = True
-                    log_content("first_param:{}, first rows:{}, cols:{};"
-                          "sec_param:{}, rows:{}, cols:{};"
-                          "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
-                                                                   sec_param, sec_param.rows, sec_param.cols,
-                                                                   ret_param, ret_param.rows, ret_param.cols))
-
-            # log_content("ty:{}, ty.rows:{}, cols:{}".format(ty, ty.rows, ty.cols))
-            # log_content("v_ty:{}, v_ty.rows:{}, v_ty:{}".format(v_ty, v_ty.rows, v_ty.cols))
-
-
-
-            # new_gmu = {}
-            # for key, value in mgu.items():
-            #     new_gmu[key] = copy.deepcopy(value)
-            # log_content("new_gmu:{}".format(new_gmu))
-
+                    log_content("add_index:\n"
+                          "fir param:{}, rows:{}, cols:{}, addr:{};\n"
+                          "sec param:{}, rows:{}, cols:{}, addr:{};\n"
+                          "ret param:{}, rows:{}, cols:{}, addr:{};\n".format(
+                                                                           first_param, first_param.rows, first_param.cols, id(first_param),
+                                                                           sec_param, sec_param.rows, sec_param.cols, id(sec_param),
+                                                                           ret_param, ret_param.rows, ret_param.cols, id(ret_param)))
+            # Handle multiplication
             # def check_mul_list():
             for mul_index in range(len(mul_fun_list)):
                 var_fun = mul_fun_list[mul_index]
@@ -1289,11 +1395,6 @@ def main():
                     remain_func = get_param(new_gmu, var_fun.types[1])
                     sec_param = get_param(new_gmu, remain_func.types[0])
                     ret_param = get_param(new_gmu, remain_func.types[1])
-                    # log_content("first_param:{}, first rows:{}, cols:{};"
-                    #       "sec_param:{}, rows:{}, cols:{};"
-                    #       "ret_param:{}, rows:{}, cols:{};".format(first_param, first_param.rows, first_param.cols,
-                    #                                                sec_param, sec_param.rows, sec_param.cols,
-                    #                                                ret_param, ret_param.rows, ret_param.cols))
                     # rows
                     if first_param.cols is not None:
                         if sec_param.rows is not None:
@@ -1303,8 +1404,18 @@ def main():
                     else:
                         if sec_param.rows is not None:
                             first_param.cols = sec_param.rows
-                    ret_param.rows = first_param.rows if ret_param.rows is None else ret_param.rows
-                    ret_param.cols = sec_param.cols if ret_param.cols is None else ret_param.cols
+                    if ret_param.rows is None:
+                        ret_param.rows = first_param.rows
+                    else:
+                        if first_param.rows is None:
+                            # Fill back
+                            first_param.rows = ret_param.rows
+                    if ret_param.cols is None:
+                        ret_param.cols = sec_param.cols
+                    else:
+                        if sec_param.cols is None:
+                            # Fill back
+                            sec_param.cols = ret_param.cols
                     log_content("mul_index:{};\n"
                           "fir param:{}, rows:{}, cols:{}, addr:{};\n"
                           "sec param:{}, rows:{}, cols:{}, addr:{};\n"
@@ -1319,6 +1430,11 @@ def main():
             if cnt > 5:
                 unresolved = False
 
+        v_ty = apply(new_gmu, my_env['f'])
+        log_content("f, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+        v_ty = apply(new_gmu, my_env['g'])
+        log_content("g, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+        log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
             # check_mul_list()
 
 
