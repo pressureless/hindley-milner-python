@@ -28,7 +28,7 @@ class BasePythonTest(unittest.TestCase):
         # (f 3) : bool
         my_env = {"f": Function(Integer, Bool)}
         example = Apply(Identifier("f"), Identifier("3"))
-        ty, mgu = infer_exp(my_env, example)
+        ty, mgu, t = infer_exp(my_env, example)
         self.assertEqualOperator(ty, Bool)
 
     def test_inference2(self):
@@ -40,7 +40,7 @@ class BasePythonTest(unittest.TestCase):
                   "merge": Function(Integer, Function(Bool, Bool)),
                   "z": TypeVariable()}
         example = Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("z")), Identifier("3"))))
-        ty, mgu = infer_exp(my_env, example)
+        ty, mgu, t = infer_exp(my_env, example)
         z_ty = apply(mgu, my_env['z'])
         self.assertEqualOperator(z_ty, Integer)
 
@@ -48,7 +48,7 @@ class BasePythonTest(unittest.TestCase):
         # (let g = (fn f => 5) in (g g)) : int
         my_env = {}
         example = Let("g", Lambda("f", Identifier("5")), Apply(Identifier("g"), Identifier("g")))
-        ty, mgu = infer_exp(my_env, example)
+        ty, mgu, t = infer_exp(my_env, example)
         self.assertEqualOperator(ty, Integer)
 
     def test_generalization(self):
@@ -58,17 +58,17 @@ class BasePythonTest(unittest.TestCase):
                   "merge": Function(Integer, Function(Bool, Bool))}
         # ((merge (test_f 3)) (test_f true)) : bool
         example = Apply(Identifier("test_f"), Identifier("3"))
-        res, mgu = infer_exp(my_env, example)
+        res, mgu, t = infer_exp(my_env, example)
         self.assertEqualOperator(res, Integer)
         #
         example = Apply(Apply(Identifier("merge"), Apply(Identifier("test_f"), Identifier("3"))), Apply(Identifier("test_f"), Identifier("true")))
-        res, mgu = infer_exp(my_env, example)
+        res, mgu, t = infer_exp(my_env, example)
         self.assertEqualOperator(res, Bool)
         # (let f = (fn x => x) in ((merge (f 3)) (f true))) : bool
         example = Let("f", Lambda("x", Identifier("x")),
             Apply(Apply(Identifier("merge"), Apply(Identifier("f"), Identifier("3"))),
                   Apply(Identifier("f"), Identifier("true"))))
-        res, mgu = infer_exp(my_env, example)
+        res, mgu, t = infer_exp(my_env, example)
         self.assertEqualOperator(res, Bool)
 
     def test_generalize_m_set(self):
@@ -89,7 +89,7 @@ class BasePythonTest(unittest.TestCase):
                                         ),
                                   Apply(Identifier("f"), Identifier("true"))))),
                    Apply(Identifier("h"), Identifier("4")))
-        res, mgu = infer_exp(my_env, example)
+        res, mgu, t = infer_exp(my_env, example)
         self.assertEqualOperator(res, TypeOperator("*", (Integer, Integer)))
         # (let h = (fn g => (let f = (fn x => g) in ((pair (f 3)) (f true)))) in (h true)) : int
         example = Let("h",
@@ -102,5 +102,5 @@ class BasePythonTest(unittest.TestCase):
                                         ),
                                   Apply(Identifier("f"), Identifier("true"))))),
                    Apply(Identifier("h"), Identifier("true")))
-        res, mgu = infer_exp(my_env, example)
+        res, mgu, t = infer_exp(my_env, example)
         self.assertEqualOperator(res, TypeOperator("*", (Bool, Bool)))

@@ -983,10 +983,231 @@ def infer_exp(env, node):
         infer_ty = apply(mgu, t)
         log_content("Inferred type str: {}".format(str(t)))
         log_perm("Inferred value: {}".format(infer_ty))
-        return infer_ty, mgu, t
+        #####################################################3
+        new_gmu = gen_new_mgu_list()
+        # infer_ty = new_gmu[t.name]
+        infer_ty = apply(new_gmu, t)
+        # check dimensions
+        assert_list = []
+        unresolved = True
+        cnt = 0
+        while unresolved:
+            unresolved = False
+            cnt += 1
+            log_content("cnt: {}".format(cnt))
+            # Handle addition
+            unresolved_add = handle_addition(new_gmu)
+            if unresolved_add:
+                unresolved = True
+            # Handle multiplication
+            unresolved_mul = handle_multiplication(new_gmu)
+            if unresolved_mul:
+                unresolved = True
+            # log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(infer_ty, infer_ty.rows, infer_ty.cols, id(infer_ty)))
+            if cnt > 5:
+                unresolved = False
+        return infer_ty, new_gmu, t
     except (ParseError, InferenceError) as e:
         log_content(e)
 
+
+
+def get_param(cur_mgu, var_type):
+    if isinstance(var_type, TypeVariable):
+        var_param = cur_mgu[var_type.name]
+    else:
+        var_param = var_type
+    return var_param
+
+
+
+def resolved_matrix(m_value):
+    is_resolved = True
+    if isinstance(m_value, TypeMrowDouble) or isinstance(m_value, TypeMrow):
+        is_resolved = m_value.rows is not None
+    elif isinstance(m_value, TypeMcolDouble) or isinstance(m_value, TypeMcol):
+        is_resolved = m_value.cols is not None
+    elif isinstance(m_value, TypeMfixedDouble) or isinstance(m_value, TypeMfixed):
+        is_resolved = m_value.cols is not None and m_value.rows is not None
+    return is_resolved
+
+
+def gen_new_mgu_list():
+    global mgu_list
+    log_content("add_fun_list: {}".format(add_fun_list))
+    log_content("mul_fun_list: {}".format(mul_fun_list))
+    # Re-process the mgu, create new instances and find the dependency
+    log_content("Before mul, mgu_list:{}".format(mgu_list))
+    new_gmu = {}
+    for cur_index in range(len(mgu_list)):
+        cur_mgu = mgu_list[len(mgu_list) - 1 - cur_index]
+        for key, value in cur_mgu.items():
+            if isinstance(value, TypeM):
+                # if value.rows is not None or value.cols is not None:
+                #     new_gmu[key] = value
+                # else:
+                #     new_gmu[key] = copy.deepcopy(value)
+                new_gmu[key] = copy.deepcopy(value)
+                log_content("key:{}, cur_index:{}, value:{}, addr:{}".format(key, cur_index, new_gmu[key],
+                                                                             id(new_gmu[key])))
+            elif isinstance(value, TypeOperator):
+                new_tpo = copy.deepcopy(value)
+                for type_index in range(len(new_tpo.types)):
+                    if isinstance(new_tpo.types[type_index], TypeVariable):
+                        new_tpo.types[type_index] = new_gmu[new_tpo.types[type_index].name]
+                        log_content("key:{}, cur_index:{}, type_index:{}, value:{}, addr:{}".format(key, cur_index,
+                                                                                                    type_index,
+                                                                                                    new_tpo.types[
+                                                                                                        type_index], id(
+                                new_tpo.types[type_index])))
+                new_gmu[key] = new_tpo
+    log_content("new_gmu:{}".format(new_gmu))
+    return new_gmu
+
+
+def handle_addition(new_gmu):
+    unresolved = False
+    for var_fun in add_fun_list:
+        first_param = get_param(new_gmu, var_fun.types[0])
+        if isinstance(first_param, TypeM):
+            # matrix addition
+            remain_func = get_param(new_gmu, var_fun.types[1])
+            sec_param = get_param(new_gmu, remain_func.types[0])
+            ret_param = get_param(new_gmu, remain_func.types[1])
+            # rows
+            if first_param.rows is not None:
+                if sec_param.rows is not None:
+                    assert first_param.rows == sec_param.rows
+                    # assert_list.append(first_param.rows, sec_param.rows)
+                else:
+                    sec_param.rows = first_param.rows
+                ret_param.rows = first_param.rows
+            else:
+                if sec_param.rows is not None:
+                    first_param.rows = sec_param.rows
+                    ret_param.rows = sec_param.rows
+                else:
+                    if ret_param.rows is not None:
+                        # Fill back
+                        first_param.rows = ret_param.rows
+                        sec_param.rows = ret_param.rows
+            # cols
+            if first_param.cols is not None:
+                if sec_param.cols is not None:
+                    assert first_param.cols == sec_param.cols
+                    # assert_list.append(first_param.cols, sec_param.cols)
+                else:
+                    sec_param.cols = first_param.cols
+                ret_param.cols = first_param.cols
+            else:
+                if sec_param.cols is not None:
+                    first_param.cols = sec_param.cols
+                    ret_param.cols = sec_param.cols
+                else:
+                    if ret_param.cols is not None:
+                        # Fill back
+                        first_param.cols = ret_param.cols
+                        sec_param.cols = ret_param.cols
+            resolved = resolved_matrix(ret_param)
+            if not resolved:
+                unresolved = True
+            log_content("add_index:\n"
+                        "fir param:{}, rows:{}, cols:{}, addr:{};\n"
+                        "sec param:{}, rows:{}, cols:{}, addr:{};\n"
+                        "ret param:{}, rows:{}, cols:{}, addr:{};\n".format(
+                first_param, first_param.rows, first_param.cols, id(first_param),
+                sec_param, sec_param.rows, sec_param.cols, id(sec_param),
+                ret_param, ret_param.rows, ret_param.cols, id(ret_param)))
+    return unresolved
+
+
+def handle_multiplication(new_gmu):
+    unresolved = False
+    for mul_index in range(len(mul_fun_list)):
+        var_fun = mul_fun_list[mul_index]
+        first_param = get_param(new_gmu, var_fun.types[0])
+        remain_func = get_param(new_gmu, var_fun.types[1])
+        sec_param = get_param(new_gmu, remain_func.types[0])
+        ret_param = get_param(new_gmu, remain_func.types[1])
+        if isinstance(first_param, TypeM):
+            # matrix addition
+            if isinstance(sec_param, TypeM):
+                # Matrix * Matrix
+                # rows
+                if first_param.cols is not None:
+                    if sec_param.rows is not None:
+                        assert first_param.cols == sec_param.rows
+                    else:
+                        sec_param.rows = first_param.cols
+                else:
+                    if sec_param.rows is not None:
+                        first_param.cols = sec_param.rows
+                if ret_param.rows is None:
+                    ret_param.rows = first_param.rows
+                else:
+                    if first_param.rows is None:
+                        # Fill back
+                        first_param.rows = ret_param.rows
+                if ret_param.cols is None:
+                    ret_param.cols = sec_param.cols
+                else:
+                    if sec_param.cols is None:
+                        # Fill back
+                        sec_param.cols = ret_param.cols
+                log_content("mul_index:{};\n"
+                            "fir param:{}, rows:{}, cols:{}, addr:{};\n"
+                            "sec param:{}, rows:{}, cols:{}, addr:{};\n"
+                            "ret param:{}, rows:{}, cols:{}, addr:{};\n".format(mul_index,
+                                                                                first_param, first_param.rows,
+                                                                                first_param.cols, id(first_param),
+                                                                                sec_param, sec_param.rows,
+                                                                                sec_param.cols, id(sec_param),
+                                                                                ret_param, ret_param.rows,
+                                                                                ret_param.cols, id(ret_param)))
+            else:
+                # Matrix * Scalar
+                if ret_param.rows is None:
+                    ret_param.rows = first_param.rows
+                else:
+                    if first_param.rows is None:
+                        # Fill back
+                        first_param.rows = ret_param.rows
+                    else:
+                        assert first_param.rows == ret_param.rows
+                if ret_param.cols is None:
+                    ret_param.cols = first_param.cols
+                else:
+                    if first_param.cols is None:
+                        # Fill back
+                        first_param.cols = ret_param.cols
+                    else:
+                        assert first_param.cols == ret_param.cols
+        else:
+            if isinstance(sec_param, TypeM):
+                # Scalar * Matrix
+                if ret_param.rows is None:
+                    ret_param.rows = sec_param.rows
+                else:
+                    if sec_param.rows is None:
+                        # Fill back
+                        sec_param.rows = ret_param.rows
+                    else:
+                        assert sec_param.rows == ret_param.rows
+                if ret_param.cols is None:
+                    ret_param.cols = sec_param.cols
+                else:
+                    if sec_param.cols is None:
+                        # Fill back
+                        sec_param.cols = ret_param.cols
+                    else:
+                        assert sec_param.cols == ret_param.cols
+            else:
+                # Scalar * Scalar
+                pass
+        resolved = resolved_matrix(ret_param)
+        if not resolved:
+            unresolved = True
+    return unresolved
 
 def main():
     """The main example program.
@@ -1243,16 +1464,16 @@ def main():
         # Apply(Apply(Identifier("mul"), TypeMcol(cols=3)),
         #       Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3))),
 
-        # Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)),
-        #       Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),
+        Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)),
+              Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),
 
-        # M(2,3) +
+        # M(2,3) + f**M(5,6)*M(6,3)
         # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
         #       Apply( Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  TypeMfixed(rows=6, cols=3))),
 
         # M(2,3) + f*M(5,6)*g
-        Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
-              Apply( Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
+        # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
+        #       Apply(Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
 
         # Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3)),
 
@@ -1274,166 +1495,22 @@ def main():
     # for e in my_env:
     #     log_content("{}: {}".format(e, my_env[e]))
     # log_content("")
-    def resolved_matrix(m_value):
-        is_resolved = True
-        if isinstance(m_value, TypeMrowDouble) or isinstance(m_value, TypeMrow):
-            is_resolved = m_value.rows is not None
-        elif isinstance(m_value, TypeMcolDouble) or isinstance(m_value, TypeMcol):
-            is_resolved = m_value.cols is not None
-        elif isinstance(m_value, TypeMfixedDouble) or isinstance(m_value, TypeMfixed):
-            is_resolved = m_value.cols is not None and m_value.rows is not None
-        return is_resolved
 
 
     # my_env["x3"] = TypeVariable()
     # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))
     for example in examples:
         ty, mgu, t = infer_exp(my_env, example)
-        log_content("add_fun_list: {}".format(add_fun_list))
-        log_content("mul_fun_list: {}".format(mul_fun_list))
-        def get_param(cur_mgu, var_type):
-            if isinstance(var_type, TypeVariable):
-                var_param = cur_mgu[var_type.name]
-            else:
-                var_param = var_type
-            return var_param
-        # Re-process the mgu, create new instances and find the dependency
-        log_content("Before mul, mgu_list:{}".format(mgu_list))
-        new_gmu = {}
-        for cur_index in range(len(mgu_list)):
-            cur_mgu = mgu_list[len(mgu_list) - 1 - cur_index]
-            for key, value in cur_mgu.items():
-                if isinstance(value, TypeM):
-                    # if value.rows is not None or value.cols is not None:
-                    #     new_gmu[key] = value
-                    # else:
-                    #     new_gmu[key] = copy.deepcopy(value)
-                    new_gmu[key] = copy.deepcopy(value)
-                    log_content("key:{}, cur_index:{}, value:{}, addr:{}".format(key, cur_index, new_gmu[key],
-                                                                           id(new_gmu[key])))
-                elif isinstance(value, TypeOperator):
-                    new_tpo = copy.deepcopy(value)
-                    for type_index in range(len(new_tpo.types)):
-                        if isinstance(new_tpo.types[type_index], TypeVariable):
-                            new_tpo.types[type_index] = new_gmu[new_tpo.types[type_index].name]
-                            log_content("key:{}, cur_index:{}, type_index:{}, value:{}, addr:{}".format(key, cur_index,
-                                                                                                  type_index,
-                                                                                                  new_tpo.types[
-                                                                                                      type_index], id(
-                                    new_tpo.types[type_index])))
-                    new_gmu[key] = new_tpo
-        log_content("new_gmu:{}".format(new_gmu))
-        ty = new_gmu[t.name]
-        # check dimensions
-
-        assert_list = []
-        unresolved = True
-        cnt = 0
-        while unresolved:
-            unresolved = False
-            cnt += 1
-            log_content("cnt: {}".format(cnt))
-            # Handle addition
-            for var_fun in add_fun_list:
-                first_param = get_param(new_gmu, var_fun.types[0])
-                if isinstance(first_param, TypeM):
-                    # matrix addition
-                    remain_func = get_param(new_gmu, var_fun.types[1])
-                    sec_param = get_param(new_gmu, remain_func.types[0])
-                    ret_param = get_param(new_gmu, remain_func.types[1])
-                    # rows
-                    if first_param.rows is not None:
-                        if sec_param.rows is not None:
-                            assert first_param.rows == sec_param.rows
-                            # assert_list.append(first_param.rows, sec_param.rows)
-                        else:
-                            sec_param.rows = first_param.rows
-                        ret_param.rows = first_param.rows
-                    else:
-                        if sec_param.rows is not None:
-                            first_param.rows = sec_param.rows
-                            ret_param.rows = sec_param.rows
-                        else:
-                            if ret_param.rows is not None:
-                                # Fill back
-                                first_param.rows = ret_param.rows
-                                sec_param.rows = ret_param.rows
-                    # cols
-                    if first_param.cols is not None:
-                        if sec_param.cols is not None:
-                            assert first_param.cols == sec_param.cols
-                            # assert_list.append(first_param.cols, sec_param.cols)
-                        else:
-                            sec_param.cols = first_param.cols
-                        ret_param.cols = first_param.cols
-                    else:
-                        if sec_param.cols is not None:
-                            first_param.cols = sec_param.cols
-                            ret_param.cols = sec_param.cols
-                        else:
-                            if ret_param.cols is not None:
-                                # Fill back
-                                first_param.cols = ret_param.cols
-                                sec_param.cols = ret_param.cols
-                    resolved = resolved_matrix(ret_param)
-                    if not resolved:
-                        unresolved = True
-                    log_content("add_index:\n"
-                          "fir param:{}, rows:{}, cols:{}, addr:{};\n"
-                          "sec param:{}, rows:{}, cols:{}, addr:{};\n"
-                          "ret param:{}, rows:{}, cols:{}, addr:{};\n".format(
-                                                                           first_param, first_param.rows, first_param.cols, id(first_param),
-                                                                           sec_param, sec_param.rows, sec_param.cols, id(sec_param),
-                                                                           ret_param, ret_param.rows, ret_param.cols, id(ret_param)))
-            # Handle multiplication
-            # def check_mul_list():
-            for mul_index in range(len(mul_fun_list)):
-                var_fun = mul_fun_list[mul_index]
-                first_param = get_param(new_gmu, var_fun.types[0])
-                if isinstance(first_param, TypeM):
-                    # matrix addition
-                    remain_func = get_param(new_gmu, var_fun.types[1])
-                    sec_param = get_param(new_gmu, remain_func.types[0])
-                    ret_param = get_param(new_gmu, remain_func.types[1])
-                    # rows
-                    if first_param.cols is not None:
-                        if sec_param.rows is not None:
-                            assert first_param.cols == sec_param.rows
-                        else:
-                            sec_param.rows = first_param.cols
-                    else:
-                        if sec_param.rows is not None:
-                            first_param.cols = sec_param.rows
-                    if ret_param.rows is None:
-                        ret_param.rows = first_param.rows
-                    else:
-                        if first_param.rows is None:
-                            # Fill back
-                            first_param.rows = ret_param.rows
-                    if ret_param.cols is None:
-                        ret_param.cols = sec_param.cols
-                    else:
-                        if sec_param.cols is None:
-                            # Fill back
-                            sec_param.cols = ret_param.cols
-                    log_content("mul_index:{};\n"
-                          "fir param:{}, rows:{}, cols:{}, addr:{};\n"
-                          "sec param:{}, rows:{}, cols:{}, addr:{};\n"
-                          "ret param:{}, rows:{}, cols:{}, addr:{};\n".format(mul_index,
-                                                                           first_param, first_param.rows, first_param.cols, id(first_param),
-                                                                           sec_param, sec_param.rows, sec_param.cols, id(sec_param),
-                                                                           ret_param, ret_param.rows, ret_param.cols, id(ret_param)))
-                resolved = resolved_matrix(ret_param)
-                if not resolved:
-                    unresolved = True
-            log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
-            if cnt > 5:
-                unresolved = False
-
-        v_ty = apply(new_gmu, my_env['f'])
-        log_content("f, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
-        v_ty = apply(new_gmu, my_env['g'])
-        log_content("g, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+        v_ty = apply(mgu, my_env['f'])
+        if isinstance(v_ty, TypeM):
+            log_content("f, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+        else:
+            log_content("f, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
+        v_ty = apply(mgu, my_env['g'])
+        if isinstance(v_ty, TypeM):
+            log_content("g, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+        else:
+            log_content("g, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
         log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
             # check_mul_list()
 
