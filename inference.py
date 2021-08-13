@@ -367,6 +367,20 @@ class Function(TypeOperator):
         super(Function, self).__init__(name, [from_type, to_type])
 
 
+def Multi_Function(types):
+    if len(types) == 2:
+        return Function(types[0], types[1])
+    else:
+        return Function(types[0], Multi_Function(types[1:]))
+
+
+def Multi_Apply(ident, args):
+    if len(args) == 1:
+        return Apply(ident, args[0])
+    else:
+        return Apply(Multi_Apply(ident, args[:-1]), args[-1])
+
+
 def free_type_variable(x):
     if isinstance(x, TypeScheme):
         return x.get_ftvs()
@@ -513,17 +527,20 @@ def analyse(node, env=None):
         return Function(arg_type, result_type), assum, cons
     elif isinstance(node, Let):
         defn_type, assum, cons1 = analyse(node.defn, env)
-        body_type, assum2, cons2 = analyse(node.body, env)
-        x_type = assum2[node.v]
-        cons = cons1.union(cons2)
-        assum = merge_assum(assum, assum2)  # update assum
-        del assum[node.v]
-        if isinstance(x_type, list):
-            for x_tp in x_type:
-                cons.add(TypeConstraint(x_tp, defn_type, ConsType.ConsLess, node.m_set))
+        if node.body is not None:
+            body_type, assum2, cons2 = analyse(node.body, env)
+            x_type = assum2[node.v]
+            cons = cons1.union(cons2)
+            assum = merge_assum(assum, assum2)  # update assum
+            del assum[node.v]
+            if isinstance(x_type, list):
+                for x_tp in x_type:
+                    cons.add(TypeConstraint(x_tp, defn_type, ConsType.ConsLess, node.m_set))
+            else:
+                cons.add(TypeConstraint(x_type, defn_type, ConsType.ConsLess, node.m_set))
+            return body_type, assum, cons
         else:
-            cons.add(TypeConstraint(x_type, defn_type, ConsType.ConsLess, node.m_set))
-        return body_type, assum, cons
+            return defn_type, assum, cons1
     elif isinstance(node, Letrec):
         defn_type, assum, cons1 = analyse(node.defn, env)
         body_type, assum2, cons2 = analyse(node.body, env)
@@ -953,6 +970,7 @@ def log_cons(cons):
 # ==================================================================#
 # Example code to exercise the above
 def infer_exp(env, node):
+    env.update(TOP_ENV)
     log_perm("node info: {}".format(str(node)))
     log_content("Top env:")
     log_dict(env)
@@ -1209,6 +1227,142 @@ def handle_multiplication(new_gmu):
             unresolved = True
     return unresolved
 
+
+TOP_ENV = {
+    "mul": [  #
+        Function(MatrixCol, Function(MatrixRow, Matrix)),
+        Function(MatrixCol, Function(MatrixRowDouble, MatrixDouble)),
+        Function(MatrixCol, Function(MatrixFixed, MatrixCol)),
+        Function(MatrixCol, Function(MatrixFixedDouble, MatrixColDouble)),
+        #
+        Function(MatrixColDouble, Function(MatrixRow, MatrixDouble)),
+        Function(MatrixColDouble, Function(MatrixRowDouble, MatrixDouble)),
+        Function(MatrixColDouble, Function(MatrixFixed, MatrixColDouble)),
+        Function(MatrixColDouble, Function(MatrixFixedDouble, MatrixColDouble)),
+        #
+        Function(MatrixFixed, Function(MatrixRow, MatrixRow)),
+        Function(MatrixFixed, Function(MatrixRowDouble, MatrixRowDouble)),
+        Function(MatrixFixed, Function(MatrixFixed, MatrixFixed)),
+        Function(MatrixFixed, Function(MatrixFixedDouble, MatrixFixedDouble)),
+        #
+        Function(MatrixFixedDouble, Function(MatrixRow, MatrixRowDouble)),
+        Function(MatrixFixedDouble, Function(MatrixRowDouble, MatrixRowDouble)),
+        Function(MatrixFixedDouble, Function(MatrixFixed, MatrixFixedDouble)),
+        Function(MatrixFixedDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
+        #
+        # Function(Integer, Function(Matrix, Matrix)),
+        # Function(Integer, Function(MatrixDouble, MatrixDouble)),
+        # Function(Integer, Function(MatrixRow, MatrixRow)),
+        # Function(Integer, Function(MatrixRowDouble, MatrixRowDouble)),
+        # Function(Integer, Function(MatrixCol, MatrixCol)),
+        # Function(Integer, Function(MatrixColDouble, MatrixColDouble)),
+        # Function(Integer, Function(MatrixFixed, MatrixFixed)),
+        # Function(Integer, Function(MatrixFixedDouble, MatrixFixedDouble)),
+        # #
+        # Function(Matrix, Function(Integer, Matrix)),
+        # Function(MatrixDouble, Function(Integer, MatrixDouble)),
+        # Function(MatrixRow, Function(Integer, MatrixRow)),
+        # Function(MatrixRowDouble, Function(Integer, MatrixRowDouble)),
+        # Function(MatrixCol, Function(Integer, MatrixCol)),
+        # Function(MatrixColDouble, Function(Integer, MatrixColDouble)),
+        # Function(MatrixFixed, Function(Integer, MatrixFixed)),
+        # Function(MatrixFixedDouble, Function(Integer, MatrixFixedDouble)),
+        # #
+        # Function(Double, Function(Matrix, MatrixDouble)),
+        # Function(Double, Function(MatrixDouble, MatrixDouble)),
+        # Function(Double, Function(MatrixRow, MatrixRowDouble)),
+        # Function(Double, Function(MatrixRowDouble, MatrixRowDouble)),
+        # Function(Double, Function(MatrixCol, MatrixColDouble)),
+        # Function(Double, Function(MatrixColDouble, MatrixColDouble)),
+        # Function(Double, Function(MatrixFixed, MatrixFixedDouble)),
+        # Function(Double, Function(MatrixFixedDouble, MatrixFixedDouble)),
+        #
+        # Function(Matrix, Function(Double, MatrixDouble)),
+        # Function(MatrixDouble, Function(Double, MatrixDouble)),
+        # Function(MatrixRow, Function(Double, MatrixRowDouble)),
+        # Function(MatrixRowDouble, Function(Double, MatrixRowDouble)),
+        # Function(MatrixCol, Function(Double, MatrixColDouble)),
+        # Function(MatrixColDouble, Function(Double, MatrixColDouble)),
+        # Function(MatrixFixed, Function(Double, MatrixFixedDouble)),
+        # Function(MatrixFixedDouble, Function(Double, MatrixFixedDouble))
+    ],
+    "add": [Function(Matrix, Function(Matrix, Matrix)),
+            Function(Matrix, Function(MatrixDouble, MatrixDouble)),
+            Function(Matrix, Function(MatrixRow, MatrixRow)),
+            Function(Matrix, Function(MatrixRowDouble, MatrixRowDouble)),
+            Function(Matrix, Function(MatrixCol, MatrixCol)),
+            Function(Matrix, Function(MatrixColDouble, MatrixColDouble)),
+            Function(Matrix, Function(MatrixFixed, MatrixFixed)),
+            Function(Matrix, Function(MatrixFixedDouble, MatrixFixedDouble)),
+            #
+            Function(MatrixDouble, Function(Matrix, MatrixDouble)),
+            Function(MatrixDouble, Function(MatrixDouble, MatrixDouble)),
+            Function(MatrixDouble, Function(MatrixRow, MatrixRowDouble)),
+            Function(MatrixDouble, Function(MatrixRowDouble, MatrixRowDouble)),
+            Function(MatrixDouble, Function(MatrixCol, MatrixColDouble)),
+            Function(MatrixDouble, Function(MatrixColDouble, MatrixColDouble)),
+            Function(MatrixDouble, Function(MatrixFixed, MatrixFixedDouble)),
+            Function(MatrixDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
+            #
+            Function(MatrixRow, Function(Matrix, MatrixRow)),
+            Function(MatrixRow, Function(MatrixDouble, MatrixRowDouble)),
+            Function(MatrixRow, Function(MatrixRow, MatrixRow)),
+            Function(MatrixRow, Function(MatrixRowDouble, MatrixRowDouble)),
+            Function(MatrixRow, Function(MatrixCol, MatrixFixed)),
+            Function(MatrixRow, Function(MatrixColDouble, MatrixFixedDouble)),
+            Function(MatrixRow, Function(MatrixFixed, MatrixFixed)),
+            Function(MatrixRow, Function(MatrixFixedDouble, MatrixFixedDouble)),
+            #
+            Function(MatrixRowDouble, Function(Matrix, MatrixRowDouble)),
+            Function(MatrixRowDouble, Function(MatrixDouble, MatrixRowDouble)),
+            Function(MatrixRowDouble, Function(MatrixRow, MatrixRowDouble)),
+            Function(MatrixRowDouble, Function(MatrixRowDouble, MatrixRowDouble)),
+            Function(MatrixRowDouble, Function(MatrixCol, MatrixRowDouble)),
+            Function(MatrixRowDouble, Function(MatrixColDouble, MatrixRowDouble)),
+            Function(MatrixRowDouble, Function(MatrixFixed, MatrixRowDouble)),
+            Function(MatrixRowDouble, Function(MatrixFixedDouble, MatrixRowDouble)),
+            #
+            Function(MatrixCol, Function(Matrix, MatrixCol)),
+            # Function(MatrixCol, Function(MatrixDouble, MatrixColDouble)),
+            Function(MatrixCol, Function(MatrixRow, MatrixFixed)),
+            Function(MatrixCol, Function(MatrixRowDouble, MatrixFixedDouble)),
+            Function(MatrixCol, Function(MatrixCol, MatrixCol)),
+            Function(MatrixCol, Function(MatrixColDouble, MatrixColDouble)),
+            Function(MatrixCol, Function(MatrixFixed, MatrixFixed)),
+            Function(MatrixCol, Function(MatrixFixedDouble, MatrixFixedDouble)),
+            #
+            Function(MatrixColDouble, Function(Matrix, MatrixColDouble)),
+            Function(MatrixColDouble, Function(MatrixDouble, MatrixColDouble)),
+            Function(MatrixColDouble, Function(MatrixRow, MatrixFixedDouble)),
+            Function(MatrixColDouble, Function(MatrixRowDouble, MatrixFixedDouble)),
+            Function(MatrixColDouble, Function(MatrixCol, MatrixColDouble)),
+            Function(MatrixColDouble, Function(MatrixColDouble, MatrixColDouble)),
+            Function(MatrixColDouble, Function(MatrixFixed, MatrixFixedDouble)),
+            Function(MatrixColDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
+            #
+            Function(MatrixFixed, Function(Matrix, MatrixFixed)),
+            Function(MatrixFixed, Function(MatrixDouble, MatrixFixedDouble)),
+            Function(MatrixFixed, Function(MatrixRow, MatrixFixed)),
+            Function(MatrixFixed, Function(MatrixRowDouble, MatrixFixedDouble)),
+            Function(MatrixFixed, Function(MatrixCol, MatrixFixed)),
+            Function(MatrixFixed, Function(MatrixColDouble, MatrixFixedDouble)),
+            Function(MatrixFixed, Function(MatrixFixed, MatrixFixed)),
+            Function(MatrixFixed, Function(MatrixFixedDouble, MatrixFixedDouble)),
+            #
+            Function(MatrixFixedDouble, Function(Matrix, MatrixFixedDouble)),
+            Function(MatrixFixedDouble, Function(MatrixDouble, MatrixFixedDouble)),
+            Function(MatrixFixedDouble, Function(MatrixRow, MatrixFixedDouble)),
+            Function(MatrixFixedDouble, Function(MatrixRowDouble, MatrixFixedDouble)),
+            Function(MatrixFixedDouble, Function(MatrixCol, MatrixFixedDouble)),
+            Function(MatrixFixedDouble, Function(MatrixColDouble, MatrixFixedDouble)),
+            Function(MatrixFixedDouble, Function(MatrixFixed, MatrixFixedDouble)),
+            Function(MatrixFixedDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
+            #
+            Function(Integer, Function(Double, Double)),
+            Function(Double, Function(Integer, Double)),
+            Function(Double, Function(Double, Double)),
+            Function(Double, Function(Double, Double))],
+}
 def main():
     """The main example program.
 
@@ -1236,146 +1390,12 @@ def main():
               "cond": Function(Bool, Function(var3, Function(var3, var3))),
               "zero": Function(Integer, Bool),
               "pred": Function(Integer, Integer),
-              "mul": [#
-                      Function(MatrixCol, Function(MatrixRow, Matrix)),
-                      Function(MatrixCol, Function(MatrixRowDouble, MatrixDouble)),
-                      Function(MatrixCol, Function(MatrixFixed, MatrixCol)),
-                      Function(MatrixCol, Function(MatrixFixedDouble, MatrixColDouble)),
-                      #
-                      Function(MatrixColDouble, Function(MatrixRow, MatrixDouble)),
-                      Function(MatrixColDouble, Function(MatrixRowDouble, MatrixDouble)),
-                      Function(MatrixColDouble, Function(MatrixFixed, MatrixColDouble)),
-                      Function(MatrixColDouble, Function(MatrixFixedDouble, MatrixColDouble)),
-                      #
-                      Function(MatrixFixed, Function(MatrixRow, MatrixRow)),
-                      Function(MatrixFixed, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(MatrixFixed, Function(MatrixFixed, MatrixFixed)),
-                      Function(MatrixFixed, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(MatrixFixedDouble, Function(MatrixRow, MatrixRowDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixFixed, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      # Function(Integer, Function(Matrix, Matrix)),
-                      # Function(Integer, Function(MatrixDouble, MatrixDouble)),
-                      # Function(Integer, Function(MatrixRow, MatrixRow)),
-                      # Function(Integer, Function(MatrixRowDouble, MatrixRowDouble)),
-                      # Function(Integer, Function(MatrixCol, MatrixCol)),
-                      # Function(Integer, Function(MatrixColDouble, MatrixColDouble)),
-                      # Function(Integer, Function(MatrixFixed, MatrixFixed)),
-                      # Function(Integer, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      # #
-                      # Function(Matrix, Function(Integer, Matrix)),
-                      # Function(MatrixDouble, Function(Integer, MatrixDouble)),
-                      # Function(MatrixRow, Function(Integer, MatrixRow)),
-                      # Function(MatrixRowDouble, Function(Integer, MatrixRowDouble)),
-                      # Function(MatrixCol, Function(Integer, MatrixCol)),
-                      # Function(MatrixColDouble, Function(Integer, MatrixColDouble)),
-                      # Function(MatrixFixed, Function(Integer, MatrixFixed)),
-                      # Function(MatrixFixedDouble, Function(Integer, MatrixFixedDouble)),
-                      # #
-                      # Function(Double, Function(Matrix, MatrixDouble)),
-                      # Function(Double, Function(MatrixDouble, MatrixDouble)),
-                      # Function(Double, Function(MatrixRow, MatrixRowDouble)),
-                      # Function(Double, Function(MatrixRowDouble, MatrixRowDouble)),
-                      # Function(Double, Function(MatrixCol, MatrixColDouble)),
-                      # Function(Double, Function(MatrixColDouble, MatrixColDouble)),
-                      # Function(Double, Function(MatrixFixed, MatrixFixedDouble)),
-                      # Function(Double, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      # Function(Matrix, Function(Double, MatrixDouble)),
-                      # Function(MatrixDouble, Function(Double, MatrixDouble)),
-                      # Function(MatrixRow, Function(Double, MatrixRowDouble)),
-                      # Function(MatrixRowDouble, Function(Double, MatrixRowDouble)),
-                      # Function(MatrixCol, Function(Double, MatrixColDouble)),
-                      # Function(MatrixColDouble, Function(Double, MatrixColDouble)),
-                      # Function(MatrixFixed, Function(Double, MatrixFixedDouble)),
-                      # Function(MatrixFixedDouble, Function(Double, MatrixFixedDouble))
-                   ],
-              "add": [Function(Matrix, Function(Matrix, Matrix)),
-                      Function(Matrix, Function(MatrixDouble, MatrixDouble)),
-                      Function(Matrix, Function(MatrixRow, MatrixRow)),
-                      Function(Matrix, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(Matrix, Function(MatrixCol, MatrixCol)),
-                      Function(Matrix, Function(MatrixColDouble, MatrixColDouble)),
-                      Function(Matrix, Function(MatrixFixed, MatrixFixed)),
-                      Function(Matrix, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(MatrixDouble, Function(Matrix, MatrixDouble)),
-                      Function(MatrixDouble, Function(MatrixDouble, MatrixDouble)),
-                      Function(MatrixDouble, Function(MatrixRow, MatrixRowDouble)),
-                      Function(MatrixDouble, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(MatrixDouble, Function(MatrixCol, MatrixColDouble)),
-                      Function(MatrixDouble, Function(MatrixColDouble, MatrixColDouble)),
-                      Function(MatrixDouble, Function(MatrixFixed, MatrixFixedDouble)),
-                      Function(MatrixDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(MatrixRow, Function(Matrix, MatrixRow)),
-                      Function(MatrixRow, Function(MatrixDouble, MatrixRowDouble)),
-                      Function(MatrixRow, Function(MatrixRow, MatrixRow)),
-                      Function(MatrixRow, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(MatrixRow, Function(MatrixCol, MatrixFixed)),
-                      Function(MatrixRow, Function(MatrixColDouble, MatrixFixedDouble)),
-                      Function(MatrixRow, Function(MatrixFixed, MatrixFixed)),
-                      Function(MatrixRow, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(MatrixRowDouble, Function(Matrix, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(MatrixDouble, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(MatrixRow, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(MatrixRowDouble, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(MatrixCol, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(MatrixColDouble, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(MatrixFixed, MatrixRowDouble)),
-                      Function(MatrixRowDouble, Function(MatrixFixedDouble, MatrixRowDouble)),
-                      #
-                      Function(MatrixCol, Function(Matrix, MatrixCol)),
-                      # Function(MatrixCol, Function(MatrixDouble, MatrixColDouble)),
-                      Function(MatrixCol, Function(MatrixRow, MatrixFixed)),
-                      Function(MatrixCol, Function(MatrixRowDouble, MatrixFixedDouble)),
-                      Function(MatrixCol, Function(MatrixCol, MatrixCol)),
-                      Function(MatrixCol, Function(MatrixColDouble, MatrixColDouble)),
-                      Function(MatrixCol, Function(MatrixFixed, MatrixFixed)),
-                      Function(MatrixCol, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(MatrixColDouble, Function(Matrix, MatrixColDouble)),
-                      Function(MatrixColDouble, Function(MatrixDouble, MatrixColDouble)),
-                      Function(MatrixColDouble, Function(MatrixRow, MatrixFixedDouble)),
-                      Function(MatrixColDouble, Function(MatrixRowDouble, MatrixFixedDouble)),
-                      Function(MatrixColDouble, Function(MatrixCol, MatrixColDouble)),
-                      Function(MatrixColDouble, Function(MatrixColDouble, MatrixColDouble)),
-                      Function(MatrixColDouble, Function(MatrixFixed, MatrixFixedDouble)),
-                      Function(MatrixColDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(MatrixFixed, Function(Matrix, MatrixFixed)),
-                      Function(MatrixFixed, Function(MatrixDouble, MatrixFixedDouble)),
-                      Function(MatrixFixed, Function(MatrixRow, MatrixFixed)),
-                      Function(MatrixFixed, Function(MatrixRowDouble, MatrixFixedDouble)),
-                      Function(MatrixFixed, Function(MatrixCol, MatrixFixed)),
-                      Function(MatrixFixed, Function(MatrixColDouble, MatrixFixedDouble)),
-                      Function(MatrixFixed, Function(MatrixFixed, MatrixFixed)),
-                      Function(MatrixFixed, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(MatrixFixedDouble, Function(Matrix, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixDouble, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixRow, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixRowDouble, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixCol, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixColDouble, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixFixed, MatrixFixedDouble)),
-                      Function(MatrixFixedDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
-                      #
-                      Function(Integer, Function(Double, Double)),
-                      Function(Double, Function(Integer, Double)),
-                      Function(Double, Function(Double, Double)),
-                      Function(Double, Function(Double, Double))],
               # "index": [Function(Matrix, Function(Integer, Integer)),
                         "index":[Function(MatrixColDouble, Function(Integer, Double))],
               "test_f": generalize({}, Function(var4, var4)),
               "merge": Function(Integer, Function(Bool, Bool)),
               "aa": generalize({}, Function(var2, Function(TypeVariable(),  Function(TypeVariable(), TypeVariable())))),
               "times": Function(Integer, Function(Integer, Integer))}
-
     pair = Apply(Apply(Identifier("pair"),
                        Apply(Identifier("f"),
                              Identifier("4"))),
@@ -1464,8 +1484,10 @@ def main():
         # Apply(Apply(Identifier("mul"), TypeMcol(cols=3)),
         #       Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3))),
 
-        Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)),
-              Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),
+        # Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)),
+        #       Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),
+
+        Let("s", Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)), TypeMfixed(rows=3, cols=6)), None),
 
         # M(2,3) + f**M(5,6)*M(6,3)
         # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
