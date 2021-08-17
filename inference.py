@@ -25,7 +25,6 @@ class ConsType(IntEnum):
 
 add_fun_list = []
 mul_fun_list = []
-mgu_list = []
 class TypeConstraint(object):
     def __init__(self, lhs=None, rhs=None, ctype=ConsType.ConsInvalid, mid=None):
         self.lhs = lhs
@@ -221,6 +220,7 @@ inherited_dict = {
     "TypeMcol": ["TypeMcol", "TypeMfixed"],
     "TypeMfixedDouble": ["TypeMfixed", "TypeMfixedDouble"],
     "TypeMfixed": ["TypeMfixed"],
+    "double": ["double", "int"],
 }
 
 
@@ -731,6 +731,11 @@ def split_cons(cons):
 
 
 def split_minimum_ty(cons):
+    """
+    Find the constraint with the minimum type variables
+    :param cons:
+    :return:
+    """
     next_con = None
     cur_cnt = math.inf
     for cur_con in cons:
@@ -796,13 +801,62 @@ def find_proto(source, target_list):
 
 
 def find_generic_cos(cons):
-    cur_cons = cons.rhs[0]
-    for cur_index in range(1, len(cons.rhs)):
-        if not is_more_generic_opt(cur_cons, cons.rhs[cur_index]):
-            cur_cons = cons.rhs[cur_index]
-    print("find_generic_cos, cur_cons: {}".format(cur_cons))
-    cons.rhs = cur_cons
+    """
+    Reduce the number of cons
+    :param cons:
+    :return:
+    """
+    # cur_cons = cons.rhs[0]
+    # for cur_index in range(1, len(cons.rhs)):
+    #     if not is_more_generic_opt(cur_cons, cons.rhs[cur_index]):
+    #         cur_cons = cons.rhs[cur_index]
+    # print("find_generic_cos, cur_cons: {}".format(cur_cons))
+    # cons.rhs = cur_cons
+    # cons.ctype = ConsType.ConsEq
+    #
+    old_list = cons.rhs
+    new_list = []
+    for cur_index in range(len(old_list)):
+        if len(new_list) == 0:
+            new_list.append(old_list[cur_index])
+        else:
+            handled = False
+            for inner_index in range(len(new_list)):
+                if is_similar_types(old_list[cur_index], new_list[inner_index]):
+                    handled = True
+                    if is_more_generic_opt(old_list[cur_index], new_list[inner_index]):
+                        new_list[inner_index] = old_list[cur_index]
+                    break
+            if not handled:
+                new_list.append(old_list[cur_index])
+    print("old_list, old_list: {}".format(old_list))
+    print("new_list, new_list: {}".format(new_list))
+    cons.rhs = new_list
+    if len(new_list) > 1:
+        print("more than one!!!!!!")
+        cons.rhs = new_list[0]
     cons.ctype = ConsType.ConsEq
+
+
+
+
+def is_similar_types(lhs, rhs):
+    if isinstance(lhs, TypeOperator) and isinstance(rhs, TypeOperator):
+        similar = True
+        if len(lhs.types) != len(rhs.types):
+            similar = False
+        else:
+            for cur_index in range(len(lhs.types)):
+                if not is_similar_types(lhs.types[cur_index], rhs.types[cur_index]):
+                    similar = False
+                    break
+    elif isinstance(lhs, TypeVariable) and isinstance(rhs, TypeVariable):
+        similar = True
+    elif isinstance(lhs, TypeCon) and isinstance(rhs, TypeCon):
+        similar = True
+    else:
+        similar = False
+    return similar
 
 
 def is_more_generic(lhs, rhs):
@@ -829,14 +883,13 @@ def is_more_generic_tp(lhs_tp, rhs_tp):
     return more_generic
 
 
-def solve_cons(cons):
+def solve_cons(cons, cur_mgu_list=[]):
     # log_content("solve_cons cons:{}".format(cons))
     # for con in cons:
     #     log_content(con)
     if len(cons) == 0:
         s = dict()
     else:
-        global mgu_list
         next_con, remain_cons = split_cons(cons)
         # log_content("next_con: {}".format(next_con))
         if next_con.ctype == ConsType.ConsEq:
@@ -844,8 +897,8 @@ def solve_cons(cons):
             log_content("size:{}, cur mgu: {{".format(len(remain_cons)))
             log_dict(mgu)
             log_content("}")
-            mgu_list.append(mgu)
-            s = compose(solve_cons(applyList(mgu, remain_cons)), mgu)
+            cur_mgu_list.append(mgu)
+            s = compose(solve_cons(applyList(mgu, remain_cons), cur_mgu_list), mgu)
         elif next_con.ctype == ConsType.ConsLessM:
             if next_con.satisfied(remain_cons):
                 type_scheme = generalize(gen_env_dict(next_con.mid), next_con.rhs)
@@ -856,7 +909,7 @@ def solve_cons(cons):
                 log_content("New cons: {}".format(str(new_cons)))
                 remain_cons.add(new_cons)
                 log_cons(remain_cons)  # log
-                s = solve_cons(remain_cons)
+                s = solve_cons(remain_cons, cur_mgu_list)
             else:
                 assert False, "Need to check"
         elif next_con.ctype == ConsType.ConsLess:
@@ -864,16 +917,16 @@ def solve_cons(cons):
             log_content("New cons: {}".format(str(new_cons)))
             remain_cons.add(new_cons)
             log_cons(remain_cons)  # log
-            s = solve_cons(remain_cons)
-        else:
+            s = solve_cons(remain_cons, cur_mgu_list)
+        elif next_con.ctype == ConsType.ConsIn:
             log_content("New new : {}".format(str(next_con)))
             find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
             if find:
                 log_content("size:{}, cur mgu: {{".format(len(remain_cons)))
                 log_dict(mgu)
                 log_content("}")
-                mgu_list.append(mgu)
-                s = compose(solve_cons(applyList(mgu, remain_cons)), mgu)
+                cur_mgu_list.append(mgu)
+                s = compose(solve_cons(applyList(mgu, remain_cons), cur_mgu_list), mgu)
     # log_content("current substitution: {}".format(s))
     return s
 
@@ -981,8 +1034,6 @@ def infer_exp(env, node):
     add_fun_list.clear()
     global mul_fun_list
     mul_fun_list.clear()
-    global mgu_list
-    mgu_list.clear()
     try:
         t, assum, cons = analyse(node, env)
         log_content("\nFinal assumption: {}".format(assum))
@@ -994,7 +1045,8 @@ def infer_exp(env, node):
         log_content("\nCurrent cons: {}".format(len(cons)))
         for con in cons:
             log_content(con)
-        mgu = solve_cons(cons)
+        cur_mgu_list = []
+        mgu = solve_cons(cons, cur_mgu_list)
         log_content("mgu: {")
         log_dict(mgu)
         log_content("}")
@@ -1002,7 +1054,7 @@ def infer_exp(env, node):
         log_content("Inferred type str: {}".format(str(t)))
         log_perm("Inferred value: {}".format(infer_ty))
         #####################################################3
-        new_gmu = gen_new_mgu_list()
+        new_gmu = gen_new_mgu_list(cur_mgu_list)
         # infer_ty = new_gmu[t.name]
         infer_ty = apply(new_gmu, t)
         # check dimensions
@@ -1050,8 +1102,7 @@ def resolved_matrix(m_value):
     return is_resolved
 
 
-def gen_new_mgu_list():
-    global mgu_list
+def gen_new_mgu_list(mgu_list):
     log_content("add_fun_list: {}".format(add_fun_list))
     log_content("mul_fun_list: {}".format(mul_fun_list))
     # Re-process the mgu, create new instances and find the dependency
@@ -1250,41 +1301,41 @@ TOP_ENV = {
         Function(MatrixFixedDouble, Function(MatrixFixed, MatrixFixedDouble)),
         Function(MatrixFixedDouble, Function(MatrixFixedDouble, MatrixFixedDouble)),
         #
-        # Function(Integer, Function(Matrix, Matrix)),
-        # Function(Integer, Function(MatrixDouble, MatrixDouble)),
-        # Function(Integer, Function(MatrixRow, MatrixRow)),
-        # Function(Integer, Function(MatrixRowDouble, MatrixRowDouble)),
-        # Function(Integer, Function(MatrixCol, MatrixCol)),
-        # Function(Integer, Function(MatrixColDouble, MatrixColDouble)),
-        # Function(Integer, Function(MatrixFixed, MatrixFixed)),
-        # Function(Integer, Function(MatrixFixedDouble, MatrixFixedDouble)),
-        # #
-        # Function(Matrix, Function(Integer, Matrix)),
-        # Function(MatrixDouble, Function(Integer, MatrixDouble)),
-        # Function(MatrixRow, Function(Integer, MatrixRow)),
-        # Function(MatrixRowDouble, Function(Integer, MatrixRowDouble)),
-        # Function(MatrixCol, Function(Integer, MatrixCol)),
-        # Function(MatrixColDouble, Function(Integer, MatrixColDouble)),
-        # Function(MatrixFixed, Function(Integer, MatrixFixed)),
-        # Function(MatrixFixedDouble, Function(Integer, MatrixFixedDouble)),
-        # #
-        # Function(Double, Function(Matrix, MatrixDouble)),
-        # Function(Double, Function(MatrixDouble, MatrixDouble)),
-        # Function(Double, Function(MatrixRow, MatrixRowDouble)),
-        # Function(Double, Function(MatrixRowDouble, MatrixRowDouble)),
-        # Function(Double, Function(MatrixCol, MatrixColDouble)),
-        # Function(Double, Function(MatrixColDouble, MatrixColDouble)),
-        # Function(Double, Function(MatrixFixed, MatrixFixedDouble)),
-        # Function(Double, Function(MatrixFixedDouble, MatrixFixedDouble)),
+        Function(Integer, Function(Matrix, Matrix)),
+        Function(Integer, Function(MatrixDouble, MatrixDouble)),
+        Function(Integer, Function(MatrixRow, MatrixRow)),
+        Function(Integer, Function(MatrixRowDouble, MatrixRowDouble)),
+        Function(Integer, Function(MatrixCol, MatrixCol)),
+        Function(Integer, Function(MatrixColDouble, MatrixColDouble)),
+        Function(Integer, Function(MatrixFixed, MatrixFixed)),
+        Function(Integer, Function(MatrixFixedDouble, MatrixFixedDouble)),
         #
-        # Function(Matrix, Function(Double, MatrixDouble)),
-        # Function(MatrixDouble, Function(Double, MatrixDouble)),
-        # Function(MatrixRow, Function(Double, MatrixRowDouble)),
-        # Function(MatrixRowDouble, Function(Double, MatrixRowDouble)),
-        # Function(MatrixCol, Function(Double, MatrixColDouble)),
-        # Function(MatrixColDouble, Function(Double, MatrixColDouble)),
-        # Function(MatrixFixed, Function(Double, MatrixFixedDouble)),
-        # Function(MatrixFixedDouble, Function(Double, MatrixFixedDouble))
+        Function(Matrix, Function(Integer, Matrix)),
+        Function(MatrixDouble, Function(Integer, MatrixDouble)),
+        Function(MatrixRow, Function(Integer, MatrixRow)),
+        Function(MatrixRowDouble, Function(Integer, MatrixRowDouble)),
+        Function(MatrixCol, Function(Integer, MatrixCol)),
+        Function(MatrixColDouble, Function(Integer, MatrixColDouble)),
+        Function(MatrixFixed, Function(Integer, MatrixFixed)),
+        Function(MatrixFixedDouble, Function(Integer, MatrixFixedDouble)),
+        #
+        Function(Double, Function(Matrix, MatrixDouble)),
+        Function(Double, Function(MatrixDouble, MatrixDouble)),
+        Function(Double, Function(MatrixRow, MatrixRowDouble)),
+        Function(Double, Function(MatrixRowDouble, MatrixRowDouble)),
+        Function(Double, Function(MatrixCol, MatrixColDouble)),
+        Function(Double, Function(MatrixColDouble, MatrixColDouble)),
+        Function(Double, Function(MatrixFixed, MatrixFixedDouble)),
+        Function(Double, Function(MatrixFixedDouble, MatrixFixedDouble)),
+
+        Function(Matrix, Function(Double, MatrixDouble)),
+        Function(MatrixDouble, Function(Double, MatrixDouble)),
+        Function(MatrixRow, Function(Double, MatrixRowDouble)),
+        Function(MatrixRowDouble, Function(Double, MatrixRowDouble)),
+        Function(MatrixCol, Function(Double, MatrixColDouble)),
+        Function(MatrixColDouble, Function(Double, MatrixColDouble)),
+        Function(MatrixFixed, Function(Double, MatrixFixedDouble)),
+        Function(MatrixFixedDouble, Function(Double, MatrixFixedDouble))
     ],
     "add": [Function(Matrix, Function(Matrix, Matrix)),
             Function(Matrix, Function(MatrixDouble, MatrixDouble)),
@@ -1487,15 +1538,15 @@ def main():
         # Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)),
         #       Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),
 
-        Let("s", Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)), TypeMfixed(rows=3, cols=6)), None),
+        # Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)), TypeMfixed(rows=3, cols=6)),
 
         # M(2,3) + f**M(5,6)*M(6,3)
         # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
         #       Apply( Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  TypeMfixed(rows=6, cols=3))),
 
         # M(2,3) + f*M(5,6)*g
-        # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
-        #       Apply(Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
+        Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
+              Apply(Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
 
         # Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3)),
 
