@@ -1173,7 +1173,6 @@ def get_param(cur_mgu, var_type):
     return var_param
 
 
-
 def resolved_matrix(m_value):
     is_resolved = True
     if isinstance(m_value, TypeMrowDouble) or isinstance(m_value, TypeMrow):
@@ -1226,6 +1225,7 @@ def handle_addition(new_gmu):
             remain_func = get_param(new_gmu, var_fun.types[1])
             sec_param = get_param(new_gmu, remain_func.types[0])
             ret_param = get_param(new_gmu, remain_func.types[1])
+            assert isinstance(sec_param, TypeM)
             # rows
             if first_param.rows is not None:
                 if sec_param.rows is not None:
@@ -1236,8 +1236,11 @@ def handle_addition(new_gmu):
                 ret_param.rows = first_param.rows
             else:
                 if sec_param.rows is not None:
+                    if ret_param.rows is None:
+                        ret_param.rows = sec_param.rows
+                    else:
+                        assert ret_param.rows == sec_param.rows
                     first_param.rows = sec_param.rows
-                    ret_param.rows = sec_param.rows
                 else:
                     if ret_param.rows is not None:
                         # Fill back
@@ -1253,15 +1256,18 @@ def handle_addition(new_gmu):
                 ret_param.cols = first_param.cols
             else:
                 if sec_param.cols is not None:
+                    if ret_param.cols is None:
+                        ret_param.cols = sec_param.cols
+                    else:
+                        assert ret_param.cols == sec_param.cols
                     first_param.cols = sec_param.cols
-                    ret_param.cols = sec_param.cols
                 else:
                     if ret_param.cols is not None:
                         # Fill back
                         first_param.cols = ret_param.cols
                         sec_param.cols = ret_param.cols
             resolved = resolved_matrix(ret_param)
-            if not resolved:
+            if not (resolved and resolved_matrix(first_param) and resolved_matrix(sec_param)):
                 unresolved = True
             log_content("add_index:\n"
                         "fir param:{}, rows:{}, cols:{}, addr:{};\n"
@@ -1300,12 +1306,16 @@ def handle_multiplication(new_gmu):
                     if first_param.rows is None:
                         # Fill back
                         first_param.rows = ret_param.rows
+                    else:
+                        assert ret_param.rows == first_param.rows
                 if ret_param.cols is None:
                     ret_param.cols = sec_param.cols
                 else:
                     if sec_param.cols is None:
                         # Fill back
                         sec_param.cols = ret_param.cols
+                    else:
+                        assert ret_param.cols == first_param.cols
                 log_content("mul_index:{};\n"
                             "fir param:{}, rows:{}, cols:{}, addr:{};\n"
                             "sec param:{}, rows:{}, cols:{}, addr:{};\n"
@@ -1357,7 +1367,7 @@ def handle_multiplication(new_gmu):
                 # Scalar * Scalar
                 pass
         resolved = resolved_matrix(ret_param)
-        if not resolved:
+        if not (resolved and resolved_matrix(first_param) and resolved_matrix(sec_param)):
             unresolved = True
     return unresolved
 
@@ -1457,7 +1467,7 @@ TOP_ENV = {
             Function(MatrixRowDouble, Function(MatrixFixedDouble, MatrixRowDouble)),
             #
             Function(MatrixCol, Function(Matrix, MatrixCol)),
-            # Function(MatrixCol, Function(MatrixDouble, MatrixColDouble)),
+            Function(MatrixCol, Function(MatrixDouble, MatrixColDouble)),
             Function(MatrixCol, Function(MatrixRow, MatrixFixed)),
             Function(MatrixCol, Function(MatrixRowDouble, MatrixFixedDouble)),
             Function(MatrixCol, Function(MatrixCol, MatrixCol)),
@@ -1495,7 +1505,7 @@ TOP_ENV = {
             Function(Integer, Function(Double, Double)),
             Function(Double, Function(Integer, Double)),
             Function(Double, Function(Double, Double)),
-            Function(Double, Function(Double, Double))],
+            Function(Integer, Function(Integer, Integer))],
 }
 def main():
     """The main example program.
@@ -1627,12 +1637,20 @@ def main():
         # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
         #       Apply( Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  TypeMfixed(rows=6, cols=3))),
 
+        # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
+        #       Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=2, cols=3))),
+
         Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
-              Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=2, cols=3))),
+              Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)), Identifier("f"))),
+
+
+        # Apply(Apply(Identifier("add"), Identifier("f")), Identifier("g")),
 
         # M(2,3) + f*M(5,6)*g
         # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
         #       Apply(Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
+
+        # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)), Identifier("f")),
 
         # Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3)),
 
@@ -1670,11 +1688,11 @@ def main():
                 log_content("f, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
             else:
                 log_content("f, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
-            # v_ty = apply(mgu, my_env['g'])
-            # if isinstance(v_ty, TypeM):
-            #     log_content("g, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
-            # else:
-            #     log_content("g, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
+            v_ty = apply(mgu, my_env['g'])
+            if isinstance(v_ty, TypeM):
+                log_content("g, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+            else:
+                log_content("g, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
             log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
                 # check_mul_list()
 
