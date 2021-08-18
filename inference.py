@@ -660,11 +660,13 @@ def unify(x, y):
             "Expected: ", "\t" + str(y)
         ]))
 
+
 def unify_matrix(x, y):
     if isinstance(x, TypeMfixed):
         pass
     elif isinstance(x, TypeMfixed):
         pass
+
 
 def split_cons(cons):
     if len(cons) <= 1:
@@ -672,11 +674,15 @@ def split_cons(cons):
         if next_con.ctype == ConsType.ConsIn:
             find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
             if find:
+                # next_con.rhs = new_list
                 if len(new_list) != 1:
                     # decrease the original options
                     next_con.rhs = new_list
                     log_content("split_cons, trimed con: {}".format(next_con))
                     find_generic_cos(next_con)
+            else:
+                print("not find:{}".format(next_con))
+                raise InferenceError("not find: ")
         return next_con, set()
     else:
         next_le_cons = None
@@ -721,11 +727,21 @@ def split_cons(cons):
             log_content("Error or tips, multiple options for overloaded operators")
             if in_cnt == 1:
                 print("in_cnt: {}".format(in_cnt))
-                find_generic_cos(in_con)
+                # find_generic_cos(in_con)
                 next_con = in_con
+                ##################
+                find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
+                if find:
+                    # next_con.rhs = new_list
+                    if len(new_list) != 1:
+                        # decrease the original options
+                        next_con.rhs = new_list
+                        log_content("split_cons, trimed con: {}".format(next_con))
+                        find_generic_cos(next_con)
                 print("trimmmmmmmmm")
             else:
-                return split_minimum_ty(cons)
+                next_con, cons = split_minimum_ty(cons)
+                return next_con, cons
         cons.remove(next_con)
         return next_con, cons
 
@@ -745,6 +761,14 @@ def split_minimum_ty(cons):
                 cur_cnt = tmp_cnt
                 next_con = cur_con
     cons.remove(next_con)
+    ############
+    find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
+    if find:
+        if len(new_list) != 1:
+            # decrease the original options
+            next_con.rhs = new_list
+            log_content("split_cons, trimed con: {}".format(next_con))
+            find_generic_cos(next_con)
     return next_con, cons
 
 
@@ -789,7 +813,7 @@ def find_proto(source, target_list):
     for target in target_list:
         try:
             mgu = unify(source, target)
-            log_content("find_proto, cur mgu: {}".format(mgu))
+            # log_content("find_proto, cur mgu: {}".format(mgu))
             if len(mgu) > 0:
                 find = True
                 new_list.append(target)
@@ -801,6 +825,7 @@ def find_proto(source, target_list):
 
 
 def find_generic_cos(cons):
+    return
     """
     Reduce the number of cons
     :param cons:
@@ -829,13 +854,16 @@ def find_generic_cos(cons):
                     break
             if not handled:
                 new_list.append(old_list[cur_index])
-    print("old_list, old_list: {}".format(old_list))
-    print("new_list, new_list: {}".format(new_list))
+    print("find_generic_cos, old_list: {}".format(old_list))
+    print("find_generic_cos, new_list: {}".format(new_list))
     cons.rhs = new_list
     if len(new_list) > 1:
         print("more than one!!!!!!")
+        # cons.rhs = new_list[0]
+        cons.ctype = ConsType.ConsIn
+    else:
         cons.rhs = new_list[0]
-    cons.ctype = ConsType.ConsEq
+        cons.ctype = ConsType.ConsEq
 
 
 
@@ -887,8 +915,12 @@ def solve_cons(cons, cur_mgu_list=[]):
     # log_content("solve_cons cons:{}".format(cons))
     # for con in cons:
     #     log_content(con)
+    solution_list = []
+    solution_mgu_list = []
     if len(cons) == 0:
         s = dict()
+        solution_list.append(s)
+        solution_mgu_list.append(cur_mgu_list)
     else:
         next_con, remain_cons = split_cons(cons)
         # log_content("next_con: {}".format(next_con))
@@ -898,7 +930,11 @@ def solve_cons(cons, cur_mgu_list=[]):
             log_dict(mgu)
             log_content("}")
             cur_mgu_list.append(mgu)
-            s = compose(solve_cons(applyList(mgu, remain_cons), cur_mgu_list), mgu)
+            tmp_sol_list, tmp_sol_mgu_list = solve_cons(applyList(mgu, remain_cons), cur_mgu_list)
+            for sol_index in range(len(tmp_sol_list)):
+                solution_list.append(compose(tmp_sol_list[sol_index], mgu))
+                solution_mgu_list.append(tmp_sol_mgu_list[sol_index])
+            # s = compose(, mgu)
         elif next_con.ctype == ConsType.ConsLessM:
             if next_con.satisfied(remain_cons):
                 type_scheme = generalize(gen_env_dict(next_con.mid), next_con.rhs)
@@ -909,7 +945,7 @@ def solve_cons(cons, cur_mgu_list=[]):
                 log_content("New cons: {}".format(str(new_cons)))
                 remain_cons.add(new_cons)
                 log_cons(remain_cons)  # log
-                s = solve_cons(remain_cons, cur_mgu_list)
+                solution_list, solution_mgu_list = solve_cons(remain_cons, cur_mgu_list)
             else:
                 assert False, "Need to check"
         elif next_con.ctype == ConsType.ConsLess:
@@ -917,18 +953,47 @@ def solve_cons(cons, cur_mgu_list=[]):
             log_content("New cons: {}".format(str(new_cons)))
             remain_cons.add(new_cons)
             log_cons(remain_cons)  # log
-            s = solve_cons(remain_cons, cur_mgu_list)
+            solution_list, solution_mgu_list = solve_cons(remain_cons, cur_mgu_list)
         elif next_con.ctype == ConsType.ConsIn:
-            log_content("New new : {}".format(str(next_con)))
+            # Multiple options
             find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
             if find:
-                log_content("size:{}, cur mgu: {{".format(len(remain_cons)))
-                log_dict(mgu)
-                log_content("}")
-                cur_mgu_list.append(mgu)
-                s = compose(solve_cons(applyList(mgu, remain_cons), cur_mgu_list), mgu)
+                new_cons_list = split_in_cons(next_con)
+                for new_next_con in new_cons_list:
+                    try:
+                        new_remain_set = copy.deepcopy(remain_cons)
+                        new_remain_set.add(new_next_con)
+                        tmp_solution_list, tmp_solution_mgu_list = solve_cons(new_remain_set, copy.deepcopy(cur_mgu_list))
+                        solution_list += tmp_solution_list
+                        solution_mgu_list += tmp_solution_mgu_list
+                    except InferenceError:
+                        print("This branch doesn't work")
+                    except Exception as e:
+                        print("This branch doesn't work")
+            else:
+                print("un find!!!!!")
+            # log_content("New new : {}".format(str(next_con)))
+            # find, mgu, new_list = find_proto(next_con.lhs, next_con.rhs)
+            # if find:
+            #     log_content("size:{}, cur mgu: {{".format(len(remain_cons)))
+            #     log_dict(mgu)
+            #     log_content("}")
+            #     cur_mgu_list.append(mgu)
+            #     s = compose(solve_cons(applyList(mgu, remain_cons), cur_mgu_list), mgu)
     # log_content("current substitution: {}".format(s))
-    return s
+    return solution_list, solution_mgu_list
+
+
+def split_in_cons(cons):
+    """
+    Split constraint with type ConsType.ConsIn into several constraints with type ConsType.ConsEq
+    :param cons:
+    :return:
+    """
+    new_list = []
+    for cur_index in range(len(cons.rhs)):
+        new_list.append(TypeConstraint(cons.lhs, cons.rhs[cur_index], ConsType.ConsEq))
+    return new_list
 
 
 def difference(lhs, rhs):
@@ -1023,6 +1088,10 @@ def log_cons(cons):
 # ==================================================================#
 # Example code to exercise the above
 def infer_exp(env, node):
+    infer_ty_list = []
+    new_gmu_list = []
+    t_list = []
+
     env.update(TOP_ENV)
     log_perm("node info: {}".format(str(node)))
     log_content("Top env:")
@@ -1046,37 +1115,51 @@ def infer_exp(env, node):
         for con in cons:
             log_content(con)
         cur_mgu_list = []
-        mgu = solve_cons(cons, cur_mgu_list)
-        log_content("mgu: {")
-        log_dict(mgu)
-        log_content("}")
-        infer_ty = apply(mgu, t)
-        log_content("Inferred type str: {}".format(str(t)))
-        log_perm("Inferred value: {}".format(infer_ty))
-        #####################################################3
-        new_gmu = gen_new_mgu_list(cur_mgu_list)
-        # infer_ty = new_gmu[t.name]
-        infer_ty = apply(new_gmu, t)
-        # check dimensions
-        assert_list = []
-        unresolved = True
-        cnt = 0
-        while unresolved:
-            unresolved = False
-            cnt += 1
-            log_content("cnt: {}".format(cnt))
-            # Handle addition
-            unresolved_add = handle_addition(new_gmu)
-            if unresolved_add:
+
+        sol_list, sol_mgu_list = solve_cons(cons, cur_mgu_list)
+        # mgu = solve_cons(cons, cur_mgu_list)
+        for total_index in range(len(sol_list)):
+            print("total_index:{}".format(total_index))
+            mgu = sol_list[total_index]
+            cur_mgu_list = sol_mgu_list[total_index]
+            try:
+                # iterate each option
+                log_content("mgu: {")
+                log_dict(mgu)
+                log_content("}")
+                infer_ty = apply(mgu, t)
+                log_content("Inferred type str: {}".format(str(t)))
+                log_perm("Inferred value: {}".format(infer_ty))
+                #####################################################3
+                new_gmu = gen_new_mgu_list(cur_mgu_list)
+                # infer_ty = new_gmu[t.name]
+                infer_ty = apply(new_gmu, t)
+                # check dimensions
+                assert_list = []
                 unresolved = True
-            # Handle multiplication
-            unresolved_mul = handle_multiplication(new_gmu)
-            if unresolved_mul:
-                unresolved = True
-            # log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(infer_ty, infer_ty.rows, infer_ty.cols, id(infer_ty)))
-            if cnt > 5:
-                unresolved = False
-        return infer_ty, new_gmu, t
+                cnt = 0
+                while unresolved:
+                    unresolved = False
+                    cnt += 1
+                    log_content("cnt: {}".format(cnt))
+                    # Handle addition
+                    unresolved_add = handle_addition(new_gmu)
+                    if unresolved_add:
+                        unresolved = True
+                    # Handle multiplication
+                    unresolved_mul = handle_multiplication(new_gmu)
+                    if unresolved_mul:
+                        unresolved = True
+                    # log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(infer_ty, infer_ty.rows, infer_ty.cols, id(infer_ty)))
+                    if cnt > 5:
+                        unresolved = False
+                infer_ty_list.append(infer_ty)
+                new_gmu_list.append(new_gmu)
+                t_list.append(t)
+            except Exception as e:
+                pass
+        # return infer_ty, new_gmu, t
+        return infer_ty_list, new_gmu_list, t_list
     except (ParseError, InferenceError) as e:
         log_content(e)
 
@@ -1544,9 +1627,12 @@ def main():
         # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
         #       Apply( Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  TypeMfixed(rows=6, cols=3))),
 
-        # M(2,3) + f*M(5,6)*g
         Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
-              Apply(Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
+              Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=2, cols=3))),
+
+        # M(2,3) + f*M(5,6)*g
+        # Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
+        #       Apply(Apply(Identifier("mul"), Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=5, cols=6))),  Identifier("g"))),
 
         # Apply(Apply(Identifier("add"), Identifier("f")), TypeMcol(cols=3)),
 
@@ -1573,19 +1659,24 @@ def main():
     # my_env["x3"] = TypeVariable()
     # infer_exp(my_env, Lambda("x", Lambda("y", Apply(Apply(Identifier("add"), Identifier("x3")), Identifier("3")))))
     for example in examples:
-        ty, mgu, t = infer_exp(my_env, example)
-        v_ty = apply(mgu, my_env['f'])
-        if isinstance(v_ty, TypeM):
-            log_content("f, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
-        else:
-            log_content("f, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
-        v_ty = apply(mgu, my_env['g'])
-        if isinstance(v_ty, TypeM):
-            log_content("g, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
-        else:
-            log_content("g, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
-        log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
-            # check_mul_list()
+        ty_list, mgu_list, t_list = infer_exp(my_env, example)
+        for cur_index in range(len(ty_list)):
+            log_content("cur_index:{}".format(cur_index))
+            ty = ty_list[cur_index]
+            mgu = mgu_list[cur_index]
+            t = t_list[cur_index]
+            v_ty = apply(mgu, my_env['f'])
+            if isinstance(v_ty, TypeM):
+                log_content("f, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+            else:
+                log_content("f, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
+            # v_ty = apply(mgu, my_env['g'])
+            # if isinstance(v_ty, TypeM):
+            #     log_content("g, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
+            # else:
+            #     log_content("g, v_ty: {}, addr:{}".format(v_ty, id(v_ty)))
+            log_content("ty:{}, ty.rows:{}, cols:{}, addr:{}".format(ty, ty.rows, ty.cols, id(ty)))
+                # check_mul_list()
 
 
 
