@@ -2,10 +2,7 @@
 """
 .. module:: inference
    :synopsis: An implementation of the Hindley Milner type checking algorithm
-              based on the Scala code by Andrew Forrest, the Perl code by
-              Nikita Borisov and the paper "Basic Polymorphic Typechecking"
-              by Cardelli.
-.. moduleauthor:: Robert Smallshire
+              based on the code by Robert Smallshire.
 """
 
 from __future__ import print_function
@@ -1372,6 +1369,22 @@ def handle_multiplication(new_gmu):
     return unresolved
 
 
+def check_final_mtype(m_value):
+    """
+    Check whether the matrix type is precise
+    :param m_value: any type
+    :return:
+    """
+    is_match = True
+    if isinstance(m_value, TypeMrowDouble) or isinstance(m_value, TypeMrow):
+        is_match = m_value.rows is not None and m_value.cols is None
+    elif isinstance(m_value, TypeMcolDouble) or isinstance(m_value, TypeMcol):
+        is_match = m_value.cols is not None and m_value.rows is None
+    elif isinstance(m_value, TypeMfixedDouble) or isinstance(m_value, TypeMfixed):
+        is_match = m_value.cols is not None and m_value.rows is not None
+    return is_match
+
+
 TOP_ENV = {
     "mul": [  #
         Function(MatrixCol, Function(MatrixRow, Matrix)),
@@ -1641,7 +1654,7 @@ def main():
         #       Apply(Apply(Identifier("mul"), Identifier("f")), TypeMfixed(rows=2, cols=3))),
 
         Apply(Apply(Identifier("add"), TypeMfixed(rows=2, cols=3)),
-              Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=3)), Identifier("f"))),
+              Apply(Apply(Identifier("mul"), TypeMfixed(rows=2, cols=4)), Identifier("f"))),
 
 
         # Apply(Apply(Identifier("add"), Identifier("f")), Identifier("g")),
@@ -1684,6 +1697,9 @@ def main():
             mgu = mgu_list[cur_index]
             t = t_list[cur_index]
             v_ty = apply(mgu, my_env['f'])
+
+            if not check_final_mtype(v_ty):
+                continue
             if isinstance(v_ty, TypeM):
                 log_content("f, v_ty: {}, rows:{}, cols:{}, addr:{}".format(v_ty, v_ty.rows, v_ty.cols, id(v_ty)))
             else:
